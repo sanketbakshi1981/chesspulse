@@ -94,7 +94,7 @@ test('serves the app, chess.js and the Stockfish engine files', async (t) => {
   const index = await fetch(`${base}/`);
   assert.equal(index.status, 200);
   assert.match(await index.text(), /ChessPulse/);
-  const chess = await fetch(`${base}/vendor/chess.js`);
+  const chess = await fetch(`${base}/vendor/chess/chess.js`);
   assert.equal(chess.status, 200);
   assert.match(chess.headers.get('content-type'), /javascript/);
   const sfJs = await fetch(`${base}/vendor/stockfish/stockfish-19-lite-single.js`);

@@ -16,9 +16,7 @@ function createServer() {
 
   app.use(express.static(path.join(ROOT, 'public')));
   // Browser builds of chess.js and the Stockfish WASM engine, served from npm packages.
-  app.get('/vendor/chess.js', (req, res) => {
-    res.sendFile(path.join(ROOT, 'node_modules/chess.js/dist/esm/chess.js'));
-  });
+  app.use('/vendor/chess', express.static(path.join(ROOT, 'node_modules/chess.js/dist/esm'), { index: false }));
   app.use(
     '/vendor/stockfish',
     express.static(path.join(ROOT, 'node_modules/stockfish/bin'), {

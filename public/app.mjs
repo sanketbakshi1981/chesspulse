@@ -1,4 +1,4 @@
-import { Chess } from '/vendor/chess.js';
+import { Chess } from '/vendor/chess/chess.js';
 import { Engine } from './engine.mjs';
 import { formatScore, scoreToPercent, uciToMove } from './uci.mjs';
 
