@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChessPulse — play live chess</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>♞ ChessPulse</h1>
+    <span id="me" class="muted"></span>
+  </header>
+
+  <section id="checkin" class="card">
+    <h2>Check in to play</h2>
+    <p class="muted">Enter a name so other players online can find and challenge you.</p>
+    <form id="checkin-form">
+      <input id="name-input" name="name" maxlength="20" autocomplete="nickname" placeholder="Your name" required autofocus>
+      <button type="submit">Check in</button>
+    </form>
+    <p id="checkin-error" class="error" role="alert"></p>
+  </section>
+
+  <main id="app" hidden>
+    <aside class="card" id="lobby">
+      <h2>Online players <span id="online-count" class="badge">0</span></h2>
+      <ul id="players"></ul>
+      <div id="challenges"></div>
+      <p id="lobby-status" class="muted" role="status"></p>
+    </aside>
+
+    <section id="board-area">
+      <div class="player-bar" id="top-player"></div>
+      <div id="board-wrap">
+        <div id="eval-bar" title="Engine evaluation"><div id="eval-fill"></div></div>
+        <div id="board" aria-label="Chess board"></div>
+        <div id="promotion" hidden></div>
+      </div>
+      <div class="player-bar" id="bottom-player"></div>
+      <p id="game-status" role="status"></p>
+      <div class="controls">
+        <button id="resign-btn" hidden>Resign</button>
+        <button id="flip-btn" class="secondary">Flip board</button>
+        <button id="undo-btn" class="secondary">Undo</button>
+        <button id="new-board-btn" class="secondary">New analysis board</button>
+      </div>
+    </section>
+
+    <aside class="card" id="side-panel">
+      <h2>Analysis <small class="muted">Stockfish 19</small></h2>
+      <label class="toggle">
+        <input type="checkbox" id="engine-toggle"> Enable engine
+      </label>
+      <p id="engine-status" class="muted">Engine off.</p>
+      <ol id="engine-lines"></ol>
+      <h2>Moves</h2>
+      <ol id="moves"></ol>
+    </aside>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>
