@@ -3,62 +3,110 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ChessPulse — play live chess</title>
+  <title>Chess Quest | Win the board. Uncover the mission.</title>
+  <link rel="stylesheet" href="/vendor/chessboard/chessboard-1.0.0.min.css">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header>
-    <h1>♞ ChessPulse</h1>
-    <span id="me" class="muted"></span>
+    <div><h1>Chess Quest</h1><p class="muted">Win the board. Uncover the mission.</p></div>
+    <div class="account"><span id="connection" role="status">Not connected</span><button id="logout-btn" class="secondary" hidden>Sign out</button></div>
   </header>
-
+  <p id="app-error" class="error notice" role="alert"></p>
   <section id="checkin" class="card">
-    <h2>Check in to play</h2>
-    <p class="muted">Enter a name so other players online can find and challenge you.</p>
+    <p class="eyebrow">One board. Two secret missions. 10+0.</p>
+    <h2 id="auth-title">Welcome back</h2>
+    <p class="muted">Win with chess. Earn XP through private quests and clever deduction. Your rating measures chess skill, not XP.</p>
     <form id="checkin-form">
-      <input id="name-input" name="name" maxlength="20" autocomplete="nickname" placeholder="Your name" required autofocus>
-      <button type="submit">Check in</button>
+      <label>Display name<input id="name-input" name="name" maxlength="20" autocomplete="username" required autofocus></label>
+      <label>Password<input id="password-input" name="password" type="password" minlength="10" maxlength="128" autocomplete="current-password" required></label>
+      <fieldset id="onboarding" hidden>
+        <legend>Your starting profile</legend>
+        <label>Experience<select id="experience-input" name="experience"><option value="beginner">Beginner</option><option value="casual" selected>Casual</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
+        <label>Chess rating (optional)<input id="rating-input" name="rating" type="text" inputmode="numeric" pattern="[0-9]+" placeholder="1000 if left blank"></label>
+        <p class="muted">Self-reported and unverified, 100&ndash;3000. No Chess.com or Lichess connection yet. The first five rated games are provisional.</p>
+      </fieldset>
+      <button id="auth-submit" type="submit">Sign in</button>
     </form>
+    <button id="auth-switch" class="secondary">New here? Create an account</button>
     <p id="checkin-error" class="error" role="alert"></p>
   </section>
-
   <main id="app" hidden>
-    <aside class="card" id="lobby">
-      <h2>Online players <span id="online-count" class="badge">0</span></h2>
-      <ul id="players"></ul>
-      <div id="challenges"></div>
-      <p id="lobby-status" class="muted" role="status"></p>
+    <aside class="stack">
+      <section class="card">
+        <p class="eyebrow">Your journey</p><h2 id="me"></h2>
+        <dl id="profile-stats"></dl>
+        <label class="toggle"><input id="visibility-toggle" type="checkbox"> Show me in the online directory</label>
+        <p class="muted">Hidden by default. You can still find a match or exchange challenges by display name.</p>
+      </section>
+      <section class="card" id="lobby">
+        <h2>Online players <span id="online-count" class="badge">0</span></h2>
+        <p class="muted">Public directory only. Every match is rated 10+0 with secret quests.</p>
+        <button id="find-match-btn">Find match &middot; 10+0</button>
+        <button id="cancel-queue-btn" class="secondary" hidden>Leave queue</button>
+        <ul id="players"></ul>
+        <form id="challenge-form"><label>Challenge by display name<input id="challenge-name" maxlength="20" required></label><button type="submit" class="secondary">Send challenge</button></form>
+        <button id="cancel-challenge-btn" class="secondary" hidden>Cancel challenge</button>
+        <div id="challenges"></div>
+        <p id="lobby-status" class="muted" role="status"></p>
+      </section>
+      <section class="card"><h2>Recent games</h2><ul id="history"></ul></section>
     </aside>
-
     <section id="board-area">
+      <p class="eyebrow" id="board-heading">Rated quest chess &middot; 10+0 rapid</p>
       <div class="player-bar" id="top-player"></div>
       <div id="board-wrap">
-        <div id="eval-bar" title="Engine evaluation"><div id="eval-fill"></div></div>
+        <div id="eval-bar" title="Postgame engine evaluation"><div id="eval-fill"></div></div>
         <div id="board" aria-label="Chess board"></div>
-        <div id="promotion" hidden></div>
+        <div id="promotion" role="dialog" aria-label="Choose promotion piece" hidden></div>
       </div>
       <div class="player-bar" id="bottom-player"></div>
-      <p id="game-status" role="status"></p>
+      <nav id="review-controls" aria-label="Move navigation" hidden>
+        <div class="review-buttons">
+          <button id="review-first" class="secondary" aria-label="First position" title="First position (Home)">&#124;&#9664;</button>
+          <button id="review-previous" class="secondary" aria-label="Previous move" title="Previous move (Left arrow)">&#9664;</button>
+          <button id="review-next" class="secondary" aria-label="Next move" title="Next move (Right arrow)">&#9654;</button>
+          <button id="review-last" class="secondary" aria-label="Last position" title="Last position (End)">&#9654;&#124;</button>
+        </div>
+        <p id="review-position" class="muted" role="status" aria-live="polite"></p>
+      </nav>
+      <p id="game-status" role="status">Find a match or challenge a friend to begin.</p>
+      <form id="move-form" hidden>
+        <label>Keyboard move<input id="move-input" placeholder="e2e4 or e7e8q" pattern="[a-h][1-8][a-h][1-8][qrbn]?" maxlength="5" autocomplete="off"></label>
+        <button type="submit" class="secondary">Play move</button>
+      </form>
       <div class="controls">
-        <button id="resign-btn" hidden>Resign</button>
+        <button id="resign-btn" class="danger" hidden>Resign</button>
+        <button id="draw-btn" class="secondary" hidden>Offer draw</button>
+        <button id="claim-draw-btn" class="secondary" title="Claim on the current position, or enter an intended move in the keyboard input first" hidden>Claim rule draw</button>
+        <button id="accept-draw-btn" hidden>Accept draw</button>
+        <button id="decline-draw-btn" class="secondary" hidden>Decline draw</button>
         <button id="flip-btn" class="secondary">Flip board</button>
-        <button id="undo-btn" class="secondary">Undo</button>
-        <button id="new-board-btn" class="secondary">New analysis board</button>
+        <button id="undo-btn" class="secondary" hidden>Analysis: undo</button>
+        <button id="rematch-btn" hidden>Challenge again</button>
       </div>
+      <section id="recap" class="card" hidden aria-label="Game recap"></section>
     </section>
-
-    <aside class="card" id="side-panel">
-      <h2>Analysis <small class="muted">Stockfish 19</small></h2>
-      <label class="toggle">
-        <input type="checkbox" id="engine-toggle"> Enable engine
-      </label>
-      <p id="engine-status" class="muted">Engine off.</p>
-      <ol id="engine-lines"></ol>
-      <h2>Moves</h2>
-      <ol id="moves"></ol>
+    <aside class="stack" id="side-panel">
+      <section id="quest-panel" class="card">
+        <p class="eyebrow">Your secret mission</p><h2>Private objectives</h2>
+        <ul id="own-quests"></ul><p class="muted">Optional for victory. Completed quests earn XP at the end of eligible games.</p>
+        <h2>Uncover their mission</h2>
+        <p id="guess-count" role="status"></p>
+        <form id="guess-form"><label>Suspected objective<select id="guess-picker"></select></label><button id="guess-btn" type="submit">Guess objective</button></form>
+        <ul id="guesses"></ul><ul id="revealed-quests"></ul>
+      </section>
+      <section id="analysis-panel" class="card" hidden>
+        <h2>Postgame evaluation <small class="muted">Stockfish 19</small></h2>
+        <label class="toggle"><input type="checkbox" id="engine-toggle"> Enable engine</label>
+        <p id="engine-status" class="muted">Engine off.</p><ol id="engine-lines"></ol>
+        <p class="muted">Evaluation is never available during an active rated game, including in another tab.</p>
+      </section>
+      <section class="card"><h2>Moves</h2><ol id="moves"></ol></section>
     </aside>
   </main>
-
+  <script src="/vendor/jquery/jquery.min.js"></script>
+  <script src="/vendor/chessboard/chessboard-1.0.0.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="/app.mjs"></script>
 </body>

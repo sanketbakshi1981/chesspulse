@@ -3,7 +3,7 @@
 body {
   margin: 0;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: #1f2329;
+  background: #111b22;
   color: #e8e6e3;
 }
 header {
@@ -12,7 +12,40 @@ header {
   justify-content: space-between;
   padding: 0.75rem 1.5rem;
   background: #161a1f;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
+header p { margin: 0.3rem 0 0; }
+.account { display: flex; align-items: center; gap: 1rem; }
+.stack { display: grid; gap: 1rem; min-width: 0; }
+.eyebrow { text-transform: uppercase; letter-spacing: 0.12em; color: #b6d790; font-size: 0.75rem; }
+.notice { margin: 0.5rem 1rem; }
+.notice:empty { display: none; }
+label:not(.toggle) { display: grid; gap: 0.4rem; margin-bottom: 0.75rem; }
+fieldset { border: 1px solid #536470; border-radius: 6px; margin: 0 0 1rem; min-width: 0; }
+select, input[type="password"], input[type="text"], input:not([type]) {
+  font: inherit; padding: 0.5rem; border-radius: 6px; border: 1px solid #72818d;
+  background: #19242c; color: inherit; width: 100%; min-width: 0;
+}
+button, select, input { min-height: 40px; }
+:focus-visible { outline: 3px solid #9ed5ff; outline-offset: 3px; }
+dl { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
+dd { margin: 0; font-weight: 700; }
+#history { list-style: none; padding: 0; max-height: 280px; overflow: auto; }
+#history li { margin-bottom: 0.5rem; }
+#history button { width: 100%; text-align: left; }
+.completed { color: #b6ee99; }
+#own-quests, #guesses, #revealed-quests { padding-left: 1.2rem; }
+#own-quests li { padding-bottom: 0.8rem; }
+.player-label { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.clock { font: 700 1.5rem ui-monospace, monospace; background: #27333c; padding: 0.35rem 0.75rem; border-radius: 6px; }
+.clock.running { background: #cbe8ac; color: #142017; }
+#recap { margin-top: 1rem; }
+.recap-player { border-top: 1px solid #536470; }
+.evidence { overflow-wrap: anywhere; font-size: 0.85rem; }
+#move-form { display: flex; align-items: end; gap: 0.5rem; margin-bottom: 1rem; }
+#move-form label { margin: 0; flex: 1; }
+#auth-switch { margin-top: 1rem; }
 header h1 { margin: 0; font-size: 1.5rem; }
 h2 { font-size: 1.05rem; margin: 0 0 0.6rem; }
 .muted { color: #9aa0a6; }
@@ -53,20 +86,22 @@ input[type="text"], input:not([type]) {
   color: inherit;
 }
 
-#checkin { max-width: 420px; margin: 4rem auto; }
-#checkin form { display: flex; gap: 0.5rem; }
+#checkin { max-width: 480px; margin: 3rem auto; }
+#checkin form { display: grid; gap: 0.5rem; }
 #checkin input { flex: 1; }
 
 main {
   display: grid;
-  grid-template-columns: 240px minmax(320px, 600px) 300px;
+  grid-template-columns: minmax(230px, 280px) minmax(300px, 600px) minmax(250px, 320px);
   gap: 1rem;
   padding: 1rem;
   justify-content: center;
   align-items: start;
 }
-@media (max-width: 1100px) {
-  main { grid-template-columns: 1fr; }
+@media (max-width: 1050px) {
+  main { grid-template-columns: minmax(0, 1fr); max-width: 720px; margin: auto; }
+  #board-area { grid-row: 1; }
+  #checkin { margin: 1rem; }
 }
 
 #players { list-style: none; padding: 0; margin: 0 0 1rem; }
@@ -79,7 +114,7 @@ main {
   border-bottom: 1px solid #353b43;
 }
 #players .status { font-size: 0.8rem; color: #9aa0a6; }
-#players .status.playing { color: #e3b341; }
+#players .status.in_game { color: #e3b341; }
 #players button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
 .challenge {
   background: #34404c;
@@ -89,6 +124,7 @@ main {
 }
 .challenge .actions { display: flex; gap: 0.4rem; margin-top: 0.4rem; }
 
+#board-area { min-width: 0; }
 #board-wrap { position: relative; display: flex; gap: 6px; }
 #eval-bar {
   width: 14px;
@@ -104,54 +140,35 @@ main {
 #eval-fill { background: #f0f0f0; height: 50%; transition: height 0.3s; }
 #board {
   flex: 1;
-  aspect-ratio: 1;
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(8, 1fr);
+  min-width: 0;
   border-radius: 4px;
   overflow: hidden;
   user-select: none;
 }
-.sq {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: clamp(1.6rem, 5.5vw, 3.2rem);
-  line-height: 1;
-  cursor: pointer;
-}
-.sq.light { background: #eeeed2; }
-.sq.dark { background: #769656; }
-.sq.last.light { background: #f6f669; }
-.sq.last.dark { background: #baca2b; }
-.sq.selected { box-shadow: inset 0 0 0 4px #2f81f7; }
-.sq.check { background: radial-gradient(circle, #ff3b3b 0%, #ff3b3b55 60%, transparent 80%); }
-.sq.target::after {
+#board [data-square] { cursor: pointer; }
+#board .white-1e1d7 { background: #eeeed2; }
+#board .black-3c85d { background: #769656; }
+#board .last.white-1e1d7 { background: #f6f669; }
+#board .last.black-3c85d { background: #baca2b; }
+#board .selected { box-shadow: inset 0 0 0 4px #2f81f7; }
+#board .check { background-image: radial-gradient(circle, #ff3b3b 0%, #ff3b3b55 60%, transparent 80%); }
+#board .target::after {
   content: "";
   position: absolute;
+  inset: 0;
+  margin: auto;
+  pointer-events: none;
   width: 28%;
   height: 28%;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.25);
 }
-.sq.target.capture::after {
+#board .target.capture::after {
   width: 90%;
   height: 90%;
   background: transparent;
   border: 5px solid rgba(0, 0, 0, 0.25);
 }
-.piece.w { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 1px #000; }
-.piece.b { color: #111; text-shadow: 0 0 1px #fff; }
-.coord {
-  position: absolute;
-  font-size: 0.65rem;
-  font-weight: 600;
-  opacity: 0.7;
-  color: #333;
-}
-.coord.file { right: 3px; bottom: 1px; }
-.coord.rank { left: 3px; top: 1px; }
 
 #promotion {
   position: absolute;
@@ -162,7 +179,8 @@ main {
   gap: 0.5rem;
   background: rgba(0, 0, 0, 0.6);
 }
-#promotion button { font-size: 2.5rem; padding: 0.3rem 0.7rem; background: #eeeed2; color: #111; }
+#promotion button { padding: 0.3rem; background: #eeeed2; }
+#promotion img { display: block; width: clamp(36px, 8vw, 60px); height: auto; }
 
 .player-bar { padding: 0.4rem 0; font-weight: 600; min-height: 2rem; }
 .player-bar .turn { color: #3fb950; }
@@ -174,6 +192,7 @@ main {
 #engine-lines li { margin-bottom: 0.4rem; }
 #engine-lines .score { font-weight: 700; display: inline-block; min-width: 3.5em; }
 #moves {
+  position: relative;
   max-height: 260px;
   overflow-y: auto;
   padding-left: 2rem;
@@ -181,3 +200,10 @@ main {
   font-size: 0.9rem;
 }
 #moves li span { display: inline-block; min-width: 4.5em; }
+#moves .move-link { background: transparent; padding: 0.3rem 0.5rem; color: inherit; }
+#moves .move-link:hover { background: #444b55; }
+#moves .move-link[aria-current="step"] { background: #cbe8ac; color: #142017; font-weight: 700; }
+#review-controls { padding: 0.5rem 0; }
+.review-buttons { display: flex; justify-content: center; gap: 0.5rem; }
+.review-buttons button { min-width: 48px; }
+#review-position { margin: 0.5rem 0 0; text-align: center; font-size: 0.9rem; }
