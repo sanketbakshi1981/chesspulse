@@ -202,6 +202,28 @@ this as stateless replicas or put the database on an unreliable network share.
 | `GUESS_LIMIT` | `2`, integer 1-10 |
 | `APP_ORIGIN` | `http://<request Host>` for local development; set the exact public HTTPS origin behind a proxy |
 | `NODE_ENV` | Set `production` for Secure cookies |
+| `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | Set `PGHOST` to use PostgreSQL instead of local SQLite; default port `5432` |
+| `PGSSLMODE` | `verify-full`; `disable` is allowed only for non-production local testing |
+
+### Deploy to Azure
+
+See the [cost-conscious Azure deployment guide](infra/README.md) for a
+0–1 replica Container Apps Consumption and managed PostgreSQL B1ms deployment,
+private database networking, HTTPS, safe idle scaling and live price checks.
+The [Bicep template](infra/main.bicep) creates the infrastructure; the
+[publish script](infra/publish.sh) deploys the app without uploading local data.
+The [GitHub Actions workflow](.github/workflows/azure.yml) tests changes and
+automatically deploys successful pushes to `main` using passwordless Azure OIDC;
+complete the production environment setup in the deployment guide first.
+No Azure resources are created merely by running the app or tests.
+
+PostgreSQL uses the same schema and atomic game/reward transactions as SQLite.
+Database access is asynchronous; an application action queue preserves move,
+matchmaking and timeout serialization. A PostgreSQL session advisory lock
+prevents multiple app processes from sharing the database while presence and
+queues remain in memory. Deploy a single worker and revision, not a cluster.
+PostgreSQL integration tests use `npm run test:postgres` against a disposable
+database, as described in the deployment guide.
 
 For staging:
 
@@ -219,8 +241,9 @@ For staging:
 6. Monitor explicit request/socket/maintenance errors and reward eligibility
    logs. Arrange process supervision, TLS renewal and disk-space alerts.
 
-No hosted auth, external service, irreversible infrastructure change or actual
-staging deployment is performed by this repository update.
+The Central US deployment uses the `chessquest-mvp-centralus` resource group.
+Regional availability and cloud deployment status must be checked in Azure;
+local tests alone do not establish production readiness.
 
 ## Milestones and remaining release gates
 

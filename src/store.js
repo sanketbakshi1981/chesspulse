@@ -5,8 +5,10 @@ const { mkdirSync } = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const RULES = require('./rules');
 const { normalizeName } = require('./names');
+const SCHEMA = require('./schema');
 
 const scrypt = promisify(crypto.scrypt);
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -20,48 +22,64 @@ class Store {
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
     if (version > 1) throw new Error('Database schema is newer than this application.');
-    if (version === 0) this.transaction(() => {
-      this.db.exec(`
-        CREATE TABLE users (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL, salt TEXT NOT NULL, experience TEXT NOT NULL,
-          external_rating INTEGER, rating INTEGER NOT NULL, xp INTEGER NOT NULL DEFAULT 0 CHECK(xp>=0),
-          rated_games INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 0,
-          created_at INTEGER NOT NULL
-        );
-        CREATE TABLE sessions (
-          token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL
-        );
-        CREATE TABLE games (id TEXT PRIMARY KEY, data TEXT NOT NULL, finished INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE active_players (
-          user_id TEXT PRIMARY KEY REFERENCES users(id), game_id TEXT NOT NULL REFERENCES games(id)
-        );
-        CREATE TABLE moves (
-          game_id TEXT NOT NULL REFERENCES games(id), ply INTEGER NOT NULL, data TEXT NOT NULL,
-          PRIMARY KEY(game_id,ply)
-        );
-        CREATE TABLE quest_completions (
-          game_id TEXT NOT NULL REFERENCES games(id), user_id TEXT NOT NULL REFERENCES users(id),
-          quest_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(game_id,user_id,quest_id)
-        );
-        CREATE TABLE guesses (
-          game_id TEXT NOT NULL REFERENCES games(id), user_id TEXT NOT NULL REFERENCES users(id),
-          quest_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(game_id,user_id,quest_id)
-        );
-        CREATE TABLE xp_ledger (
-          game_id TEXT NOT NULL REFERENCES games(id), user_id TEXT NOT NULL REFERENCES users(id),
-          data TEXT NOT NULL, PRIMARY KEY(game_id,user_id)
-        );
-        CREATE TABLE rating_changes (
-          game_id TEXT NOT NULL REFERENCES games(id), user_id TEXT NOT NULL REFERENCES users(id),
-          before INTEGER NOT NULL, after INTEGER NOT NULL, PRIMARY KEY(game_id,user_id)
-        );
-        PRAGMA user_version=1;
-      `);
+    if (version === 0) this.migrateSqlite(() => {
+      this.db.exec(`${SCHEMA}\nPRAGMA user_version=1;`);
     });
   }
 
-  transaction(fn) {
+  static async open() {
+    if (!process.env.PGHOST) {
+      if (process.env.PGDATABASE || process.env.PGUSER || process.env.PGPASSWORD
+        || process.env.WEBSITE_INSTANCE_ID || process.env.CONTAINER_APP_NAME) {
+        throw new Error('PGHOST is required for PostgreSQL and Azure deployments.');
+      }
+      return new Store();
+    }
+    const { PostgresDatabase } = require('./postgres');
+    const store = Object.create(Store.prototype);
+    store.postgres = true;
+    store.db = await PostgresDatabase.connect();
+    store.db.exclusive = (fn) => store.exclusive(fn);
+    try {
+      await store.transaction(async () => {
+        await store.db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
+        const row = await store.db.prepare('SELECT version FROM schema_version').get();
+        if (row && row.version !== 1) throw new Error('Unsupported PostgreSQL database schema version.');
+        if (!row) {
+          await store.db.exec(`${SCHEMA}\nINSERT INTO schema_version VALUES (1);`);
+        }
+      });
+      return store;
+    } catch (error) {
+      await store.close();
+      throw error;
+    }
+  }
+
+  exclusive(fn) {
+    this.context ||= new AsyncLocalStorage();
+    if (this.context.getStore() === this) return fn();
+    const result = (this.pending || Promise.resolve()).then(() => this.context.run(this, fn));
+    // Callers receive the rejection; a failed action must not poison the queue.
+    this.pending = result.catch(() => {});
+    return result;
+  }
+
+  async transaction(fn) {
+    return this.exclusive(async () => {
+      await this.db.exec(this.postgres ? 'BEGIN' : 'BEGIN IMMEDIATE');
+      try {
+        const result = await fn();
+        await this.db.exec('COMMIT');
+        return result;
+      } catch (error) {
+        await this.db.exec('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
+  migrateSqlite(fn) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const result = fn();
@@ -73,8 +91,8 @@ class Store {
     }
   }
 
-  user(id) { return this.db.prepare('SELECT * FROM users WHERE id=?').get(id); }
-  byName(name) { return this.db.prepare('SELECT * FROM users WHERE name_key=?').get(name.toLowerCase()); }
+  async user(id) { return this.db.prepare('SELECT * FROM users WHERE id=?').get(id); }
+  async byName(name) { return this.db.prepare('SELECT * FROM users WHERE name_key=?').get(name.toLowerCase()); }
 
   profile(user) {
     return {
@@ -100,47 +118,49 @@ class Store {
     }
     const salt = crypto.randomBytes(16).toString('hex');
     const passwordHash = (await scrypt(password, salt, 64)).toString('hex');
-    if (this.byName(name)) throw new Error('That display name is already registered.');
     const id = crypto.randomUUID();
-    this.db.prepare(`INSERT INTO users
-      (id,name,name_key,password_hash,salt,experience,external_rating,rating,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`).run(id, name, name.toLowerCase(), passwordHash, salt, experience, external, external ?? 1000, Date.now());
-    return this.user(id);
+    return this.exclusive(async () => {
+      if (await this.byName(name)) throw new Error('That display name is already registered.');
+      await this.db.prepare(`INSERT INTO users
+        (id,name,name_key,password_hash,salt,experience,external_rating,rating,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(id, name, name.toLowerCase(), passwordHash, salt, experience, external, external ?? 1000, Date.now());
+      return this.user(id);
+    });
   }
 
   async login({ name, password } = {}) {
     if (typeof name !== 'string' || typeof password !== 'string' || name.length > 100 || password.length > 128) {
       throw new Error('Invalid display name or password.');
     }
-    const user = this.byName(name.trim());
+    const user = await this.byName(name.trim());
     const derived = await scrypt(password, user?.salt || 'unknown-account-salt', 64);
     const expected = user ? Buffer.from(user.password_hash, 'hex') : Buffer.alloc(64);
     if (!crypto.timingSafeEqual(derived, expected) || !user) throw new Error('Invalid display name or password.');
     return user;
   }
 
-  createSession(userId) {
+  async createSession(userId) {
     const token = crypto.randomBytes(32).toString('hex');
-    this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
-    this.db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_MS);
+    await this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
+    await this.db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(hashToken(token), userId, Date.now() + SESSION_MS);
     return token;
   }
 
-  session(token) {
+  async session(token) {
     if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
     return this.db.prepare(`SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id
       WHERE token_hash=? AND expires_at>?`).get(hashToken(token), Date.now());
   }
 
-  logout(token) { this.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token)); }
-  visibility(id, visible) { this.db.prepare('UPDATE users SET visible=? WHERE id=?').run(Number(visible), id); }
-  saveGame(game) {
+  async logout(token) { await this.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token)); }
+  async visibility(id, visible) { await this.db.prepare('UPDATE users SET visible=? WHERE id=?').run(Number(visible), id); }
+  async saveGame(game) {
     const data = JSON.stringify({ ...game, chess: undefined });
-    this.db.prepare(`INSERT INTO games(id,data,finished) VALUES (?,?,?)
+    await this.db.prepare(`INSERT INTO games(id,data,finished) VALUES (?,?,?)
       ON CONFLICT(id) DO UPDATE SET data=excluded.data,finished=excluded.finished`).run(game.id, data, Number(Boolean(game.result)));
   }
-  loadGames() { return this.db.prepare('SELECT data FROM games').all().map((row) => JSON.parse(row.data)); }
-  close() { this.db.close(); }
+  async loadGames() { return (await this.db.prepare('SELECT data FROM games').all()).map((row) => JSON.parse(row.data)); }
+  async close() { await this.pending; await this.db.close(); }
 }
 
 module.exports = { Store, SESSION_MS, hashToken, rank };

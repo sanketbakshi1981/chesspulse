@@ -27,9 +27,9 @@ class Lobby {
     this.challenges = new Map();
   }
 
-  activeId(id) { return this.store.db.prepare('SELECT game_id FROM active_players WHERE user_id=?').get(id)?.game_id; }
-  game(id) {
-    const row = this.store.db.prepare('SELECT data FROM games WHERE id=?').get(id);
+  async activeId(id) { return (await this.store.db.prepare('SELECT game_id FROM active_players WHERE user_id=?').get(id))?.game_id; }
+  async game(id) {
+    const row = await this.store.db.prepare('SELECT data FROM games WHERE id=?').get(id);
     if (!row) return null;
     const game = JSON.parse(row.data);
     game.chess = new Chess();
@@ -57,72 +57,77 @@ class Lobby {
   online(id) {
     return [...this.connections.values()].some((c) => c.userId === id && this.now() - c.lastSeenAt < 60_000);
   }
-  listPlayers() {
+  async listPlayers() {
     const ids = new Set([...this.connections.values()].filter((c) => this.online(c.userId)).map((c) => c.userId));
-    return [...ids].map((id) => this.store.user(id)).filter((u) => u.visible).map((u) => ({
-      id: u.id, name: u.name, rating: u.rating, status: this.activeId(u.id) ? 'in_game' : 'online',
-    })).sort((a, b) => a.name.localeCompare(b.name));
+    const players = [];
+    for (const id of ids) {
+      const u = await this.store.user(id);
+      if (u.visible) players.push({
+        id: u.id, name: u.name, rating: u.rating, status: await this.activeId(u.id) ? 'in_game' : 'online',
+      });
+    }
+    return players.sort((a, b) => a.name.localeCompare(b.name));
   }
-  presence(id) { return !this.online(id) ? 'offline' : this.activeId(id) ? 'in_game' : 'online'; }
+  async presence(id) { return !this.online(id) ? 'offline' : await this.activeId(id) ? 'in_game' : 'online'; }
 
-  challenge(fromId, rawName) {
+  async challenge(fromId, rawName) {
     const { name, error } = normalizeName(rawName);
     if (error) return { error };
-    const target = this.store.byName(name);
+    const target = await this.store.byName(name);
     if (!target || !this.online(target.id)) return { error: 'That player is unavailable.' };
     if (target.id === fromId) return { error: 'You cannot challenge yourself.' };
-    if (this.activeId(fromId) || this.activeId(target.id)) return { error: 'One player is already in a game.' };
+    if (await this.activeId(fromId) || await this.activeId(target.id)) return { error: 'One player is already in a game.' };
     this.challenges.set(fromId, target.id);
-    const from = this.store.user(fromId);
+    const from = await this.store.user(fromId);
     return { from: { id: from.id, name: from.name }, to: { id: target.id, name: target.name } };
   }
-  respond(targetId, fromId, accept) {
+  async respond(targetId, fromId, accept) {
     if (this.challenges.get(fromId) !== targetId) return { error: 'That challenge is no longer available.' };
     this.challenges.delete(fromId);
     if (!accept) return { declined: true, fromId, targetId };
     return this.start(fromId, targetId);
   }
-  start(a, b) {
-    if (a === b || !this.online(a) || !this.online(b)) return { error: 'Both players must be online.' };
-    if (this.activeId(a) || this.activeId(b)) return { error: 'One player is already in a game.' };
-    const [whiteId, blackId] = this.randomColor() ? [a, b] : [b, a];
-    const white = this.store.user(whiteId);
-    const black = this.store.user(blackId);
-    const now = this.now();
-    const game = {
-      id: crypto.randomUUID(), white: { id: white.id, name: white.name }, black: { id: black.id, name: black.name },
-      ratingBefore: { w: white.rating, b: black.rating }, chess: new Chess(), moves: [], fen: new Chess().fen(),
-      timeControl: '10+0', clocks: { w: TIME_MS, b: TIME_MS }, lastClockAt: now,
-      createdAt: now, version: 0, result: null, reason: null, drawOffer: null,
-      rules: { ...RULES, guessLimit: this.guessLimit },
-      assignments: { w: assign(this.questCount, this.questLevel), b: assign(this.questCount, this.questLevel) },
-      guesses: { w: [], b: [] }, recap: null,
-    };
-    this.store.transaction(() => {
-      this.store.saveGame(game);
-      for (const id of [a, b]) this.store.db.prepare('INSERT INTO active_players VALUES (?,?)').run(id, game.id);
+  async start(a, b) {
+    return this.store.transaction(async () => {
+      if (a === b || !this.online(a) || !this.online(b)) return { error: 'Both players must be online.' };
+      if (await this.activeId(a) || await this.activeId(b)) return { error: 'One player is already in a game.' };
+      const [whiteId, blackId] = this.randomColor() ? [a, b] : [b, a];
+      const white = await this.store.user(whiteId);
+      const black = await this.store.user(blackId);
+      const now = this.now();
+      const game = {
+        id: crypto.randomUUID(), white: { id: white.id, name: white.name }, black: { id: black.id, name: black.name },
+        ratingBefore: { w: white.rating, b: black.rating }, chess: new Chess(), moves: [], fen: new Chess().fen(),
+        timeControl: '10+0', clocks: { w: TIME_MS, b: TIME_MS }, lastClockAt: now,
+        createdAt: now, version: 0, result: null, reason: null, drawOffer: null,
+        rules: { ...RULES, guessLimit: this.guessLimit },
+        assignments: { w: assign(this.questCount, this.questLevel), b: assign(this.questCount, this.questLevel) },
+        guesses: { w: [], b: [] }, recap: null,
+      };
+      await this.store.saveGame(game);
+      for (const id of [a, b]) await this.store.db.prepare('INSERT INTO active_players VALUES (?,?)').run(id, game.id);
+      for (const id of [a, b]) this.queue.delete(id);
+      for (const [from, to] of this.challenges) {
+        if ([a, b].includes(from) || [a, b].includes(to)) this.challenges.delete(from);
+      }
+      return { game };
     });
-    for (const id of [a, b]) this.queue.delete(id);
-    for (const [from, to] of this.challenges) {
-      if ([a, b].includes(from) || [a, b].includes(to)) this.challenges.delete(from);
-    }
-    return { game };
   }
-  enqueue(id) {
-    if (this.activeId(id)) return { error: 'You are already in a game.' };
-    if (!this.queue.has(id)) this.queue.set(id, { joinedAt: this.now(), rating: this.store.user(id).rating });
+  async enqueue(id) {
+    if (await this.activeId(id)) return { error: 'You are already in a game.' };
+    if (!this.queue.has(id)) this.queue.set(id, { joinedAt: this.now(), rating: (await this.store.user(id)).rating });
     return { ok: true };
   }
-  pair() {
+  async pair() {
     const games = [];
     for (const [a, first] of this.queue) {
-      if (!this.online(a) || this.activeId(a)) { this.queue.delete(a); continue; }
+      if (!this.online(a) || await this.activeId(a)) { this.queue.delete(a); continue; }
       for (const [b, second] of this.queue) {
-        if (a === b || !this.online(b) || this.activeId(b)) continue;
+        if (a === b || !this.online(b) || await this.activeId(b)) continue;
         const wait = this.now() - Math.min(first.joinedAt, second.joinedAt);
         const band = this.ratingBand + Math.floor(wait / this.bandIntervalMs) * this.bandStep;
         if (Math.abs(first.rating - second.rating) > band) continue;
-        const result = this.start(a, b);
+        const result = await this.start(a, b);
         if (result.game) games.push(result.game);
         break;
       }
@@ -179,17 +184,17 @@ class Lobby {
     }
   }
 
-  act(id, action, data = {}) {
-    const game = this.game(data.gameId);
-    if (!game) return { error: 'Game not found.' };
-    const color = this.colorOf(game, id);
-    if (!color) return { error: 'You are not playing in this game.' };
-    if (game.result) return { error: 'The game is over.' };
-    return this.store.transaction(() => {
+  async act(id, action, data = {}) {
+    return this.store.transaction(async () => {
+      const game = await this.game(data.gameId);
+      if (!game) return { error: 'Game not found.' };
+      const color = this.colorOf(game, id);
+      if (!color) return { error: 'You are not playing in this game.' };
+      if (game.result) return { error: 'The game is over.' };
       this.touch(game);
       let error = game.result ? 'The game is over.' : null;
       if (!error) error = this.apply(game, color, action, data);
-      this.persist(game);
+      await this.persist(game);
       return { game, ...(error ? { error } : { ok: true }) };
     });
   }
@@ -264,36 +269,36 @@ class Lobby {
     return 'Unknown game action.';
   }
 
-  persist(game) {
-    this.store.saveGame(game);
+  async persist(game) {
+    await this.store.saveGame(game);
     const db = this.store.db;
-    for (const move of game.moves) db.prepare('INSERT OR IGNORE INTO moves VALUES (?,?,?)').run(game.id, move.ply, JSON.stringify(move));
+    for (const move of game.moves) await db.prepare('INSERT INTO moves VALUES (?,?,?) ON CONFLICT DO NOTHING').run(game.id, move.ply, JSON.stringify(move));
     for (const color of ['w', 'b']) {
       const id = this.side(game, color).id;
       for (const q of game.assignments[color].filter((q) => q.completedAtPly !== null)) {
-        db.prepare('INSERT OR IGNORE INTO quest_completions VALUES (?,?,?,?)').run(game.id, id, q.questId, JSON.stringify(q));
+        await db.prepare('INSERT INTO quest_completions VALUES (?,?,?,?) ON CONFLICT DO NOTHING').run(game.id, id, q.questId, JSON.stringify(q));
       }
       for (const guess of game.guesses[color]) {
-        db.prepare('INSERT OR IGNORE INTO guesses VALUES (?,?,?,?)').run(game.id, id, guess.questId, JSON.stringify(guess));
+        await db.prepare('INSERT INTO guesses VALUES (?,?,?,?) ON CONFLICT DO NOTHING').run(game.id, id, guess.questId, JSON.stringify(guess));
       }
     }
-    if (game.result && !game.recap) this.finalize(game);
-    this.store.saveGame(game);
+    if (game.result && !game.recap) await this.finalize(game);
+    await this.store.saveGame(game);
   }
 
-  finalize(game) {
-    if (this.store.db.prepare('SELECT 1 FROM rating_changes WHERE game_id=?').get(game.id)) throw new Error('Finalization record mismatch.');
+  async finalize(game) {
+    if (await this.store.db.prepare('SELECT 1 FROM rating_changes WHERE game_id=?').get(game.id)) throw new Error('Finalization record mismatch.');
     const flags = [];
     if (game.moves.length < game.rules.minRewardPlies) flags.push(`fewer than ${game.rules.minRewardPlies} plies`);
     if (game.reason === 'server abandonment') flags.push('server abandonment');
     const day = new Date(game.finishedAt).toISOString().slice(0, 10);
-    const prior = this.store.loadGames().filter((g) => g.id !== game.id && g.recap?.xpEligible
+    const prior = (await this.store.loadGames()).filter((g) => g.id !== game.id && g.recap?.xpEligible
       && new Date(g.finishedAt).toISOString().slice(0, 10) === day
       && [g.white.id, g.black.id].includes(game.white.id) && [g.white.id, g.black.id].includes(game.black.id));
     if (prior.length >= game.rules.dailyOpponentCap) flags.push('repeat-opponent daily cap');
     const xpEligible = flags.length === 0;
     const scoreW = game.result === '1-0' ? 1 : game.result === '0-1' ? 0 : 0.5;
-    const users = { w: this.store.user(game.white.id), b: this.store.user(game.black.id) };
+    const users = { w: await this.store.user(game.white.id), b: await this.store.user(game.black.id) };
     const expectedW = 1 / (1 + 10 ** ((users.b.rating - users.w.rating) / 400));
     const change = game.reason === 'server abandonment' ? 0 : Math.round(game.rules.eloK * (scoreW - expectedW));
     game.recap = { xpEligible, flags, players: {} };
@@ -308,9 +313,9 @@ class Lobby {
       const total = xpEligible ? Math.floor(events.reduce((sum, e) => sum + e.baseAmount, 0) * multiplier) : 0;
       const after = user.rating + (color === 'w' ? change : -change);
       const ledger = { events, multiplier, total, flags };
-      this.store.db.prepare('INSERT INTO xp_ledger VALUES (?,?,?)').run(game.id, user.id, JSON.stringify(ledger));
-      this.store.db.prepare('INSERT INTO rating_changes VALUES (?,?,?,?)').run(game.id, user.id, user.rating, after);
-      this.store.db.prepare('UPDATE users SET rating=?,xp=xp+?,rated_games=rated_games+? WHERE id=?')
+      await this.store.db.prepare('INSERT INTO xp_ledger VALUES (?,?,?)').run(game.id, user.id, JSON.stringify(ledger));
+      await this.store.db.prepare('INSERT INTO rating_changes VALUES (?,?,?,?)').run(game.id, user.id, user.rating, after);
+      await this.store.db.prepare('UPDATE users SET rating=?,xp=xp+?,rated_games=rated_games+? WHERE id=?')
         .run(after, total, Number(game.reason !== 'server abandonment'), user.id);
       game.recap.players[color] = {
         id: user.id, name: user.name, ratingBefore: user.rating, ratingAfter: after,
@@ -318,22 +323,24 @@ class Lobby {
         quests: game.assignments[color], guesses: game.guesses[color],
       };
     }
-    this.store.db.prepare('DELETE FROM active_players WHERE game_id=?').run(game.id);
+    await this.store.db.prepare('DELETE FROM active_players WHERE game_id=?').run(game.id);
     if (flags.length) console.info('Reward eligibility:', game.id, flags.join(', '));
   }
 
-  tick() {
-    for (const [socketId, c] of this.connections) if (this.now() - c.lastSeenAt >= 60_000) this.disconnect(socketId);
-    const finished = [];
-    for (const { game_id: id } of this.store.db.prepare('SELECT DISTINCT game_id FROM active_players').all()) {
-      const game = this.game(id);
-      this.touch(game);
-      if (game.result) {
-        this.store.transaction(() => this.persist(game));
-        finished.push(game);
+  async tick() {
+    return this.store.exclusive(async () => {
+      for (const [socketId, c] of this.connections) if (this.now() - c.lastSeenAt >= 60_000) this.disconnect(socketId);
+      const finished = [];
+      for (const { game_id: id } of await this.store.db.prepare('SELECT DISTINCT game_id FROM active_players').all()) {
+        const game = await this.game(id);
+        this.touch(game);
+        if (game.result) {
+          await this.store.transaction(() => this.persist(game));
+          finished.push(game);
+        }
       }
-    }
-    return finished;
+      return finished;
+    });
   }
 
   snapshot(game, id) {
@@ -355,8 +362,8 @@ class Lobby {
       drawClaim: game.drawClaim || null,
     };
   }
-  history(id) {
-    return this.store.loadGames().filter((g) => g.result && this.colorOf(g, id))
+  async history(id) {
+    return (await this.store.loadGames()).filter((g) => g.result && this.colorOf(g, id))
       .sort((a, b) => b.finishedAt - a.finishedAt).slice(0, 30).map((g) => ({
         gameId: g.id, white: g.white.name, black: g.black.name, result: g.result, reason: g.reason, finishedAt: g.finishedAt,
       }));

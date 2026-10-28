@@ -1,0 +1,112 @@
+name: Test and deploy to Azure
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-test-password
+          POSTGRES_DB: chessquest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - name: Test PostgreSQL and browser integration
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: chessquest_test
+          PGUSER: postgres
+          PGPASSWORD: local-test-password
+          PGSSLMODE: disable
+        run: |
+          npm run test:postgres
+          TEST_POSTGRES=1 npm run test:e2e
+      - name: Validate deployment scripts and template
+        run: |
+          bash -n infra/publish.sh
+          az bicep install
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep build --file infra/github-actions.bicep --stdout > /dev/null
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: chessquest-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: ${{ steps.endpoint.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
+      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check production configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          : "${AZURE_CLIENT_ID:?Set the production AZURE_CLIENT_ID variable}"
+          : "${AZURE_TENANT_ID:?Set the production AZURE_TENANT_ID variable}"
+          : "${AZURE_SUBSCRIPTION_ID:?Set the production AZURE_SUBSCRIPTION_ID variable}"
+          : "${AZURE_RESOURCE_GROUP:?Set the production AZURE_RESOURCE_GROUP variable}"
+          : "${AZURE_REGISTRY_NAME:?Set the production AZURE_REGISTRY_NAME variable}"
+          : "${AZURE_CONTAINER_APP_NAME:?Set the production AZURE_CONTAINER_APP_NAME variable}"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps CLI support
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Build, push and deploy immutable image
+        run: bash infra/publish.sh
+      - name: Record application URL
+        id: endpoint
+        run: |
+          host="$(az containerapp show --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_CONTAINER_APP_NAME" \
+            --query properties.configuration.ingress.fqdn -o tsv)"
+          echo "url=https://${host}" >> "$GITHUB_OUTPUT"
+          echo "Deployed image tag: \`${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Application: https://${host}" >> "$GITHUB_STEP_SUMMARY"
