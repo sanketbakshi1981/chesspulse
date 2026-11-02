@@ -1,11 +1,15 @@
-# Chess Quest — MVP Engineering Requirements
+# questoc — MVP Engineering Requirements
 
 **Status:** Implementation-ready draft for GitHub Copilot  
 **Source:** Chess Quest Vision & MVP PRD (10-minute edition), October 27, 2026  
 **Priority:** P0 unless otherwise stated  
-**Product promise:** *Win the board. Uncover the mission.*
+**Product promise:** *Little Chess, Big Adventures*
+
+**Reward and recap update (November 2, 2026):** For new games, correct guesses earn 10 base XP and quests retain 20 / 40 / 60 base XP. Every base reward is a multiple of 10, so win / draw / loss multipliers require no rounding. Existing games retain their saved reward rules. On completion, keep the board visible with earned XP and signed chess rating changes beside it, or directly below on mobile. Show guess titles and outcomes without timestamps. These rules supersede earlier guess-XP, rounding and completed-board visibility defaults.
 
 **Requirements update (October 27, 2026):** Keep the player's quest and opponent-guess action visible beside or directly below the board without page scrolling. Offer exactly 10 quest options, including exactly one correct answer, with one guess per player per game. A correct, timely guess earns 5 base XP, subject to the existing result multiplier. These rules supersede the earlier two-attempt / 15-XP defaults.
+
+**Mobile UI update (November 1, 2026):** On compact screens (up to 1050 CSS pixels wide), active play focuses on the board, clocks, private objectives and opponent deduction. With no active game, hide the board and prioritize finding a match, inviting friends by display name and recent games. Completed-game boards appear only when the player explicitly opens review, with a return-to-lobby action. This is a responsive web UI, not a native mobile app.
 
 > **Instruction to coding agent:** Implement the requirements below in the existing repository's conventions. First inspect the repository and summarize the proposed architecture, migrations, and milestones. Do not assume a framework, database, or auth provider. Prefer established, maintained chess rules libraries over custom rule engines. Ask before irreversible infrastructure changes. Do not treat illustrative APIs or data structures below as mandatory.
 
@@ -18,6 +22,7 @@
 - Chess **rating**, lifetime **XP**, and **Quest Rank** are distinct concepts. Matchmaking uses rating, never XP.
 - A player may make **one guess per game** of the opponent's **uncompleted** secret objective, choosing from **exactly 10 options containing exactly one correct answer**. A correct, timely guess earns **5 base XP** and reveals the guessed objective to the guessing player.
 - During play, the player's own quest(s) and a clearly labelled **Guess opponent's quest** action must be visible beside or directly below the board, without page scrolling.
+- Mobile lobby and queue screens must not show an idle board. Active mobile games hide profile, matchmaking, friend invites, history and the move list from the play area.
 - On game completion, show the chess result, rating change, objectives, guesses, and XP breakdown.
 - All moves, clocks, quest outcomes, guesses, XP, and rating updates are **server authoritative**. Clients never declare their own successes.
 
@@ -45,10 +50,10 @@
 - Track `online`, `in_game`, and `offline` separately from whether an account exists or has logged in historically.
 - Presence is based on authenticated live connections / heartbeat and server-side expiry; stale sessions become offline.
 - Show an online count and a list of online players with display name and relevant availability status.
-- Default privacy-safe behavior: allow players to hide from the public online directory while remaining eligible to play if they explicitly join matchmaking.
+- List every connected, authenticated player automatically, including the current player. There is no directory-hiding preference; legacy visibility flags do not affect the list. Never list offline accounts merely because they registered.
 - Handle multiple tabs/devices without incorrectly marking a user offline when one tab closes.
 
-**Accept when:** unexpected disconnect eventually expires presence; joining a match updates availability; privacy settings are respected.
+**Accept when:** two signed-in players see a count of two without opting in or refreshing; sign-in/sign-out updates the list live; unexpected disconnect eventually expires presence; joining a match updates availability; multiple tabs count as one player.
 
 ### MATCH-01 — Matchmaking and challenges
 
@@ -81,6 +86,7 @@
 - A quest is optional to winning the game, but every match has quest assignments.
 - Display the player's assigned quest title(s), progress and completion state in the board's immediate play area: beside the board on wider screens or directly below it on narrower screens. Keep these visible while playing without requiring page scrolling, opening another screen or expanding a collapsed panel.
 - Prioritize the board, clocks, own quests and opponent-guess action over profile, lobby, history and analysis content in the active-game layout. Resize/reflow the board as needed rather than pushing the quest controls below the viewport.
+- On mobile, place objectives and the guess action directly below the board; keep clocks and connection status visible. Put secondary resign/draw/flip and keyboard-move controls in an accessible expandable **Game controls & keyboard moves** section after objectives, never collapse the objectives themselves. Preserve tap-to-move, drag-to-move, promotion and reconnect behavior.
 
 **Accept when:** every match has private objectives and no public game-mode switch exists; the player can read their quest(s) and progress beside or directly below the board without scrolling in the active-game layout at desktop (1280 x 720) and mobile portrait (390 x 844) viewport sizes.
 
@@ -169,9 +175,9 @@
 
 1. **Authentication:** sign up / sign in / sign out.
 2. **Onboarding:** experience selection, optional unverified external rating.
-3. **Lobby:** online-player count/list, availability, Find Match, friend challenge.
+3. **Lobby:** on mobile, prioritize Find Match and friend invites by display name, followed by recent games; keep online-player count/list and availability available. Show a useful empty-history message. Place profile and progression below primary lobby tasks. Hide the board, objectives, move list and analysis panels while idle or queued.
 4. **Game:** board, clock, own secret objectives and progress immediately beside or below the board, a prominently visible **Guess opponent's quest** action in the same no-scroll play area, a picker with exactly 10 distinct options and exactly one correct answer, **1 guess remaining / Guess used** state, immediate private guess feedback, connection state, resign/draw. Profile/lobby/history must not push the quest and guess controls outside the viewport.
-5. **Postgame:** reveal, XP breakdown, chess result, rating delta, rematch/navigation, and optional Stockfish 19 evaluation with board-adjacent backward/forward and first/last move navigation per REVIEW-01.
+5. **Postgame:** reveal, XP breakdown, chess result, rating delta, rematch/navigation, and optional Stockfish 19 evaluation with board-adjacent backward/forward and first/last move navigation per REVIEW-01. On mobile, return focus to matchmaking, friend invites and recent games, with recap available below them. Hide the completed board until **Review game board** or a recent-game entry is selected. Explicit review shows the board, evaluation and move list with **Back to lobby**, which stops evaluation and hides the board again. Starting a new game exits review and restores the focused play layout.
 6. **Profile/history:** display name, 10+0 rating, XP, Quest Rank, recent games.
 
 All UI must be responsive, keyboard-accessible where practical, and communicate errors and reconnect state clearly. The quest text and guess action must remain visible together with the board at the QUEST-01 acceptance viewport sizes. The picker may use an accessible dialog or an adjacent panel, but opening and submitting it must not require navigating away from the game; any option-list scrolling must stay within the picker, not require scrolling the page to find the action.
@@ -243,12 +249,13 @@ Use HTTPS for initial requests and a reliable real-time transport (e.g., WebSock
 
 - Chess rules: all special moves, illegal moves, checkmate, stalemate, draws, promotion, timeout.
 - Concurrency: both players move at once, duplicate packets, reconnect, disconnect, clock race, move vs. guess ordering.
-- Privacy: opponent cannot retrieve private quests before reveal; hidden directory user not listed.
+- Privacy: opponent cannot retrieve private quests before reveal. Presence lists authenticated live players only, excludes offline accounts and deduplicates tabs/devices.
 - Quest engine: deterministic replay, no duplicate completion, boundary cases and false positives for all enabled quests.
 - Guess options: exactly 10 distinct options, exactly one matching opponent assignment even with two opponent quests, nine nonmatching decoys, no answer-key/availability metadata leaks, stable options/order across tabs and reconnects, and out-of-set IDs rejected. Disabled validators must never become assignable just to fill the picker.
 - Guessing: correct/incorrect feedback, one attempt total, concurrent submissions from multiple tabs, duplicate/replayed packets, late/completed objectives, exhausted attempt after reconnect, wrong player, game already finished, and no clock pause.
 - XP/rating: exactly one 5-base-XP event for a correct timely guess, zero for incorrect/late guesses, win/draw/loss multipliers and round-down-once behavior (including a guess-only loss awarding 2 XP), duplicate finalization, farming restrictions, no rating changes from quests.
 - Active-game layout: at 1280 x 720 desktop and 390 x 844 mobile portrait, quest titles/progress and the guess action are visible beside or directly below the board without page scrolling. Verify keyboard access, visible success/failure feedback, and guess controls remaining discoverable after reconnect.
+- Mobile navigation: at 390 x 844, verify no horizontal overflow, no idle/queued board, visible Find Match/friend invite/recent-games controls, empty history, challenge acceptance, tap moves, reconnect, postgame return to lobby, explicit recap/history review, return-to-lobby engine shutdown and new-match exit from review. Active play must show the complete square board, both clocks, objectives and guess action in the viewport while hiding unrelated panels.
 - Postgame review: first/previous/next/last controls and boundary states, clickable full move list with selection highlight, keyboard navigation without hijacking form fields, correct board and Stockfish FEN at each selected ply (including special moves), rapid navigation, variation recovery, terminal-position handling, immutable server recap, and controls hidden when evaluation is off or a rated game starts.
 - Presence: heartbeat expiry, multiple tabs, privacy, in-game transition.
 - End-to-end: register → match → see quest and guess action without scrolling → open the 10-option picker → submit the only guess before the target objective completes → see immediate success/failure → play/complete quest → finalize → recap showing the 5-base-XP event and final multiplied award when correct → enable Stockfish 19 evaluation → browse backward/forward and select recorded moves → verify evaluation follows the selected position and the saved game is unchanged.
@@ -264,6 +271,13 @@ Use HTTPS for initial requests and a reliable real-time transport (e.g., WebSock
 For each milestone, supply working code, tests, migration notes, and a short list of remaining blockers.
 
 ## 10. Decisions and assumptions to confirm
+
+**Confirmed mobile focus (November 1, 2026):**
+
+- Responsive mobile web UI: board and objectives take priority during an active game; secondary game controls remain accessible below them.
+- No active game: hide the board and prioritize matchmaking, friend invites and recent games.
+- Completed-game board and Stockfish review are explicit opt-in views; returning to lobby hides the board and stops evaluation.
+- Keep desktop review behavior and server-authoritative gameplay unchanged; no database migration is required for this layout change.
 
 **Confirmed quest visibility and guessing rules (October 27, 2026):**
 
@@ -288,7 +302,7 @@ The following other proposed defaults and decisions are unchanged by this requir
 - One quest per player initially; optionally two via configuration.
 - Quest completion XP: 20 / 40 / 60 for Easy / Medium / Hard; guess bonus is specified above.
 - Quest Rank thresholds: 0 / 200 / 500 XP initially.
-- Default presence visibility and friend challenge privacy.
+- Automatic online presence, nickname guidance and friend challenge privacy.
 - Rating algorithm and provisional placement rules.
 - XP handling for resignations, abandonment, early draws, and suspected farming.
 - Exact tactical validator rules for ambiguous seed quests.

@@ -6,26 +6,16 @@ param repository string = 'sanketbakshi1981/chesspulse'
 @description('GitHub environment; restrict its deployment branches to main in GitHub settings.')
 param githubEnvironment string = 'production'
 
-param registryName string
 param appName string
-param environmentName string = 'chessquest-environment'
-param runtimeIdentityName string = 'chessquest-runtime'
+param planName string = 'chessquest-plan'
 param location string = resourceGroup().location
 
-resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: registryName
-}
-
-resource app 'Microsoft.App/containerApps@2025-01-01' existing = {
+resource app 'Microsoft.Web/sites@2024-11-01' existing = {
   name: appName
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2025-01-01' existing = {
-  name: environmentName
-}
-
-resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: runtimeIdentityName
+resource plan 'Microsoft.Web/serverfarms@2024-11-01' existing = {
+  name: planName
 }
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -44,43 +34,23 @@ resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedI
   }
 }
 
-resource push 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(registry.id, identity.id, 'AcrPush')
-  scope: registry
-  properties: {
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8311e382-0749-4cb8-b61a-304f252e45ec')
-  }
-}
-
 resource deploy 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(app.id, identity.id, 'ContainerAppsContributor')
+  name: guid(app.id, identity.id, 'WebsiteContributor')
   scope: app
   properties: {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '358470bc-b998-42bd-ab17-a7e34c199c0f')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'de139f84-1756-47ae-9be6-808fbbe84772')
   }
 }
 
-resource joinEnvironment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(environment.id, identity.id, 'ContainerAppsContributor')
-  scope: environment
+resource readPlan 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(plan.id, identity.id, 'Reader')
+  scope: plan
   properties: {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '358470bc-b998-42bd-ab17-a7e34c199c0f')
-  }
-}
-
-resource assignRuntimeIdentity 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(runtimeIdentity.id, identity.id, 'ManagedIdentityOperator')
-  scope: runtimeIdentity
-  properties: {
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f1a07417-d97a-45cb-824c-7a7467783830')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
   }
 }
 

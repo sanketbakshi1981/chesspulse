@@ -1,49 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${AZURE_RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP to the existing resource group}"
-: "${AZURE_REGISTRY_NAME:?Set AZURE_REGISTRY_NAME to the deployed registry name}"
-if [[ "${1:-}" != "--build-only" ]]; then
-  : "${AZURE_CONTAINER_APP_NAME:?Set AZURE_CONTAINER_APP_NAME to the deployed container app name}"
+if [[ $# -ne 0 ]]; then
+  echo "Usage: bash infra/publish.sh (uses AZURE_RESOURCE_GROUP and AZURE_WEBAPP_NAME)" >&2
+  exit 1
 fi
+: "${AZURE_RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP to the existing resource group}"
+: "${AZURE_WEBAPP_NAME:?Set AZURE_WEBAPP_NAME to the deployed App Service name}"
 
 cd "$(dirname "$0")/.."
-tag="${IMAGE_TAG:-$(date -u +%Y%m%d%H%M%S)}"
-login_server="$(az acr show --name "$AZURE_REGISTRY_NAME" --query loginServer -o tsv)"
-image="${login_server}/chessquest:${tag}"
-docker build --tag "$image" .
+for tool in az node npm zip curl; do
+  command -v "$tool" >/dev/null || { echo "Required tool is missing: $tool" >&2; exit 1; }
+done
+node -e 'if (Number(process.versions.node.split(".")[0]) !== 24) throw new Error("Package with Node 24 to match App Service.")'
 
-docker_config="$(mktemp -d)"
-trap 'rm -f -- "$docker_config/config.json"; rmdir -- "$docker_config"' EXIT
-token="$(az acr login --name "$AZURE_REGISTRY_NAME" --expose-token --query accessToken -o tsv)"
-printf '%s' "$token" | docker --config "$docker_config" login "$login_server" \
-  --username 00000000-0000-0000-0000-000000000000 --password-stdin
-unset token
-docker --config "$docker_config" push "$image"
+work="$(mktemp -d)"
+stopped=false
+cleanup() {
+  local status=$?
+  rm -rf -- "$work"
+  if [[ $status -ne 0 && "$stopped" == true ]]; then
+    echo "Deployment failed after stopping the app. It has NOT been verified healthy." >&2
+    echo "Inspect deployment logs, then retry this script or restore a known-good package." >&2
+  fi
+}
+trap cleanup EXIT
 
-if [[ "${1:-}" == "--build-only" ]]; then
-  printf 'Image ready: %s\n' "$image"
-  exit 0
+mkdir "$work/app"
+cp package.json package-lock.json "$work/app/"
+cp -R src public "$work/app/"
+npm ci --omit=dev --prefix "$work/app"
+(cd "$work/app" && zip -q -r "$work/app.zip" .)
+
+plan="$(az webapp show --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" \
+  --query serverFarmId -o tsv)"
+capacity="$(az appservice plan show --ids "$plan" --query sku.capacity -o tsv)"
+if [[ "$capacity" != 1 ]]; then
+  echo "Refusing deployment: the App Service plan must have exactly one instance." >&2
+  exit 1
+fi
+host="$(az webapp show --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" \
+  --query defaultHostName -o tsv)"
+if [[ -z "$host" || "$host" == "null" ]]; then
+  echo "App Service did not return a hostname." >&2
+  exit 1
 fi
 
-echo "Deactivating old revisions before deployment; active game clocks continue."
-# Single-revision rolling replacement would briefly start two database owners.
-az containerapp revision set-mode --name "$AZURE_CONTAINER_APP_NAME" \
-  --resource-group "$AZURE_RESOURCE_GROUP" --mode multiple --output none
-revisions="$(az containerapp revision list --name "$AZURE_CONTAINER_APP_NAME" \
-  --resource-group "$AZURE_RESOURCE_GROUP" --query '[?properties.active].name' -o tsv)"
-while IFS= read -r revision; do
-  if [[ -n "$revision" ]]; then
-    az containerapp revision deactivate --name "$AZURE_CONTAINER_APP_NAME" \
-      --resource-group "$AZURE_RESOURCE_GROUP" --revision "$revision" --output none
-  fi
-done <<< "$revisions"
-az containerapp update --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
-  --image "$image" --output none
-az containerapp revision set-mode --name "$AZURE_CONTAINER_APP_NAME" \
-  --resource-group "$AZURE_RESOURCE_GROUP" --mode single --output none
-host="$(az containerapp show --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP_NAME" \
-  --query properties.configuration.ingress.fqdn -o tsv)"
+echo "Stopping the app before package replacement; schedule deployments between matches."
+az webapp stop --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
+stopped=true
+az webapp deploy --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+  --src-path "$work/app.zip" --type zip --restart false --track-status false \
+  --async false --output none
+az webapp start --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
 curl --fail --show-error --silent --retry 30 --retry-delay 10 --retry-all-errors \
   --max-time 30 "https://${host}/healthz"
+stopped=false
 printf '\nDeployment healthy: https://%s\n' "$host"

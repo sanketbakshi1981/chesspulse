@@ -50,7 +50,7 @@ test('PostgreSQL persists accounts, sessions, active games and finalization acro
     lobby.connect(bob.id, 'b');
     const { game } = await lobby.start(alice.id, bob.id);
     await lobby.act(alice.id, 'move', { gameId: game.id, version: 0, from: 'e2', to: 'e4' });
-    await assert.rejects(Store.open(), /Another Chess Quest process/);
+    await assert.rejects(Store.open(), /Another questoc process/);
     await store.close();
     store = await Store.open();
     lobby = new Lobby(store);

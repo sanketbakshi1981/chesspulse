@@ -8,86 +8,26 @@ param location string = resourceGroup().location
 @description('Lowercase letters, digits and hyphens; names receive a globally unique suffix.')
 param namePrefix string = 'chessquest'
 
+@description('Canonical HTTPS origin after custom-domain binding and certificate setup. Empty uses the Azure hostname.')
+param appOrigin string = ''
+
+@description('Optional hostname to redirect to appOrigin, for example www.questoc.com.')
+param appRedirectHost string = ''
+
 @secure()
 @minLength(16)
 param databasePassword string
 
-@description('An immutable image tag already pushed to the registry by publish.sh --build-only.')
-param imageTag string
-
 var suffix = uniqueString(resourceGroup().id)
-var appName = '${namePrefix}-${suffix}'
 var databaseName = 'chessquest'
 var databaseUser = 'chessquestadmin'
-var identityId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', '${namePrefix}-runtime')
 var tags = {
   application: 'chessquest'
   environment: 'mvp'
 }
 
-module runtime 'registry.bicep' = {
-  name: 'runtime'
-  params: {
-    location: location
-    namePrefix: namePrefix
-  }
-}
-
-resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
-  name: '${namePrefix}-network'
-  location: location
-  tags: tags
-  properties: {
-    addressSpace: {
-      addressPrefixes: ['10.42.0.0/16']
-    }
-    subnets: [
-      {
-        name: 'app'
-        properties: {
-          addressPrefix: '10.42.0.0/26'
-          delegations: [
-            {
-              name: 'container-apps'
-              properties: { serviceName: 'Microsoft.App/environments' }
-            }
-          ]
-        }
-      }
-      {
-        name: 'database'
-        properties: {
-          addressPrefix: '10.42.1.0/27'
-          delegations: [
-            {
-              name: 'postgresql'
-              properties: { serviceName: 'Microsoft.DBforPostgreSQL/flexibleServers' }
-            }
-          ]
-        }
-      }
-    ]
-  }
-}
-
-resource dns 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: '${namePrefix}.postgres.database.azure.com'
-  location: 'global'
-  tags: tags
-}
-
-resource dnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: dns
-  name: 'database-network'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: { id: network.id }
-  }
-}
-
 resource database 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
-  name: '${namePrefix}-pg-${suffix}'
+  name: '${namePrefix}-pg-public-${suffix}'
   location: location
   tags: tags
   sku: {
@@ -108,13 +48,8 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
       geoRedundantBackup: 'Disabled'
     }
     highAvailability: { mode: 'Disabled' }
-    network: {
-      delegatedSubnetResourceId: '${network.id}/subnets/database'
-      privateDnsZoneArmResourceId: dns.id
-      publicNetworkAccess: 'Disabled'
-    }
+    network: { publicNetworkAccess: 'Enabled' }
   }
-  dependsOn: [dnsLink]
 }
 
 resource appDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
@@ -126,147 +61,93 @@ resource appDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-0
   }
 }
 
-resource activityStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  name: 'cqactivity${suffix}'
+resource requireTls 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: database
+  name: 'require_secure_transport'
+  properties: {
+    value: 'on'
+    source: 'user-override'
+  }
+}
+
+resource plan 'Microsoft.Web/serverfarms@2024-11-01' = {
+  name: '${namePrefix}-plan'
   location: location
   tags: tags
-  kind: 'StorageV2'
-  sku: { name: 'Standard_LRS' }
+  kind: 'linux'
+  sku: {
+    name: 'B1'
+    tier: 'Basic'
+    capacity: 1
+  }
   properties: {
-    minimumTlsVersion: 'TLS1_2'
-    allowBlobPublicAccess: false
-    allowSharedKeyAccess: false
-    supportsHttpsTrafficOnly: true
+    reserved: true
   }
 }
 
-resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' existing = {
-  parent: activityStorage
-  name: 'default'
-}
-
-resource activityQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
-  parent: queueService
-  name: 'activity'
-}
-
-resource queueAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(activityStorage.id, identityId, 'QueueContributor')
-  scope: activityStorage
-  properties: {
-    principalId: runtime.outputs.identityPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
-  }
-}
-
-resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
-  name: '${namePrefix}-environment'
+resource app 'Microsoft.Web/sites@2024-11-01' = {
+  name: '${namePrefix}-web-${suffix}'
   location: location
   tags: tags
+  kind: 'app,linux'
   properties: {
-    appLogsConfiguration: { destination: 'azure-monitor' }
-    vnetConfiguration: {
-      infrastructureSubnetId: '${network.id}/subnets/app'
-      internal: false
+    serverFarmId: plan.id
+    httpsOnly: true
+    clientAffinityEnabled: false
+    siteConfig: {
+      linuxFxVersion: 'NODE|24-lts'
+      appCommandLine: 'node src/server.js'
+      alwaysOn: true
+      webSocketsEnabled: true
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      scmMinTlsVersion: '1.2'
     }
-    workloadProfiles: [
-      { name: 'Consumption', workloadProfileType: 'Consumption' }
-    ]
   }
 }
 
-resource app 'Microsoft.App/containerApps@2025-01-01' = {
-  name: appName
-  location: location
-  tags: tags
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: { '${identityId}': {} }
-  }
+resource appSettings 'Microsoft.Web/sites/config@2024-11-01' = {
+  parent: app
+  name: 'appsettings'
   properties: {
-    environmentId: environment.id
-    workloadProfileName: 'Consumption'
-    configuration: {
-      activeRevisionsMode: 'Single'
-      secrets: [{ name: 'database-password', value: databasePassword }]
-      registries: [
-        { server: runtime.outputs.loginServer, identity: identityId }
-      ]
-      ingress: {
-        external: true
-        targetPort: 3000
-        transport: 'auto'
-        allowInsecure: false
-        traffic: [{ latestRevision: true, weight: 100 }]
-      }
-    }
-    template: {
-      terminationGracePeriodSeconds: 30
-      containers: [
-        {
-          name: 'chessquest'
-          image: '${runtime.outputs.loginServer}/chessquest:${imageTag}'
-          resources: { cpu: json('0.25'), memory: '0.5Gi' }
-          env: [
-            { name: 'NODE_ENV', value: 'production' }
-            { name: 'PORT', value: '3000' }
-            { name: 'APP_ORIGIN', value: 'https://${appName}.${environment.properties.defaultDomain}' }
-            { name: 'PGHOST', value: database.properties.fullyQualifiedDomainName }
-            { name: 'PGPORT', value: '5432' }
-            { name: 'PGDATABASE', value: databaseName }
-            { name: 'PGUSER', value: databaseUser }
-            { name: 'PGPASSWORD', secretRef: 'database-password' }
-            { name: 'PGSSLMODE', value: 'verify-full' }
-            { name: 'AZURE_CLIENT_ID', value: runtime.outputs.identityClientId }
-            { name: 'ACTIVITY_QUEUE_URL', value: '${activityStorage.properties.primaryEndpoints.queue}activity' }
-          ]
-          probes: [
-            {
-              type: 'Startup'
-              httpGet: { path: '/healthz', port: 3000, scheme: 'HTTP' }
-              periodSeconds: 5
-              timeoutSeconds: 3
-              failureThreshold: 60
-            }
-            {
-              type: 'Readiness'
-              httpGet: { path: '/healthz', port: 3000, scheme: 'HTTP' }
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-          ]
-        }
-      ]
-      scale: {
-        minReplicas: 0
-        maxReplicas: 1
-        cooldownPeriod: 300
-        pollingInterval: 30
-        rules: [
-          { name: 'http', http: { metadata: { concurrentRequests: '1' } } }
-          {
-            name: 'activity'
-            custom: {
-              type: 'azure-queue'
-              identity: identityId
-              metadata: {
-                accountName: activityStorage.name
-                queueName: activityQueue.name
-                queueLength: '1'
-                activationQueueLength: '0'
-              }
-            }
-          }
-        ]
-      }
-    }
+    NODE_ENV: 'production'
+    APP_ORIGIN: empty(appOrigin) ? 'https://${app.properties.defaultHostName}' : appOrigin
+    APP_REDIRECT_HOST: appRedirectHost
+    PGHOST: database.properties.fullyQualifiedDomainName
+    PGPORT: '5432'
+    PGDATABASE: databaseName
+    PGUSER: databaseUser
+    PGPASSWORD: databasePassword
+    PGSSLMODE: 'verify-full'
+    WEBSITE_RUN_FROM_PACKAGE: '1'
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
   }
-  dependsOn: [appDatabase, queueAccess]
+  dependsOn: [appDatabase, requireTls]
+}
+
+// The module can expand outbound addresses after App Service has been provisioned.
+module databaseAccess 'database-access.bicep' = {
+  name: 'app-database-access'
+  params: {
+    serverName: database.name
+    outboundAddresses: split(app.properties.possibleOutboundIpAddresses, ',')
+  }
+}
+
+resource scmBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-11-01' = {
+  parent: app
+  name: 'scm'
+  properties: { allow: false }
+}
+
+resource ftpBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-11-01' = {
+  parent: app
+  name: 'ftp'
+  properties: { allow: false }
 }
 
 output appName string = app.name
-output appUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
+output planName string = plan.name
+output appUrl string = 'https://${app.properties.defaultHostName}'
 output postgresHost string = database.properties.fullyQualifiedDomainName
-output registryName string = runtime.outputs.registryName
+output postgresName string = database.name

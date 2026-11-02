@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { io } from 'socket.io-client';
 
 const origin = new URL(process.argv[2]).origin;
-const idleCheck = process.argv.includes('--idle-check');
-if (idleCheck && (!process.env.AZURE_RESOURCE_GROUP || !process.env.AZURE_CONTAINER_APP_NAME)) {
-  throw new Error('Idle verification requires AZURE_RESOURCE_GROUP and AZURE_CONTAINER_APP_NAME.');
+if (process.argv.slice(3).some((arg) => arg !== '--connection-check')) {
+  throw new Error('Usage: node infra/smoke-test.mjs <origin> [--connection-check]');
 }
+const connectionCheck = process.argv.includes('--connection-check');
 const sockets = [];
 const suffix = crypto.randomBytes(3).toString('hex');
 let activeGame;
@@ -105,14 +104,14 @@ try {
   await emit(black, 'game:move', { gameId: activeGame, version: game.version, from: 'e7', to: 'e5' });
   game = await update;
   assert.deepEqual(game.moves, ['e4', 'e5']);
-  if (idleCheck) {
-    console.log('Keeping a game active beyond the five-minute idle cooldown to verify connection survival.');
+  if (connectionCheck) {
+    console.log('Keeping a game active for over five minutes to verify WebSocket connection survival.');
     for (let attempt = 0; attempt < 17; attempt++) {
       await sleep(20_000);
-      assert.ok(white.connected && black.connected, 'An active game lost its replica or WebSocket.');
+      assert.ok(white.connected && black.connected, 'An active game lost its WebSocket.');
       await Promise.all([emit(a, 'presence:heartbeat'), emit(b, 'presence:heartbeat')]);
     }
-    console.log('Active-game WebSockets survived the idle cooldown.');
+    console.log('Active-game WebSockets survived the connection check.');
   }
   update = once(white, 'game:update');
   await emit(white, 'game:guess', { gameId: activeGame, questId: blackState.ownQuests[0].questId });
@@ -131,27 +130,6 @@ try {
   assert.ok(me.history.some((entry) => entry.gameId === gameId));
   console.log('Live HTTPS, secure sessions, private quests, WebSockets, moves, guess, ratings and recap verified.');
 
-  if (idleCheck) {
-    console.log('Waiting for idle scale-to-zero using control-plane checks only (up to 12 minutes).');
-    let zero = false;
-    for (let attempt = 0; attempt < 24; attempt++) {
-      await sleep(30_000);
-      const count = Number(execFileSync('az', [
-        'containerapp', 'replica', 'list',
-        '--resource-group', process.env.AZURE_RESOURCE_GROUP,
-        '--name', process.env.AZURE_CONTAINER_APP_NAME,
-        '--query', 'length(@)', '--output', 'tsv',
-      ], { encoding: 'utf8' }).trim());
-      assert.ok(Number.isInteger(count), 'Invalid replica-count response.');
-      if (count === 0) { zero = true; break; }
-    }
-    assert.ok(zero, 'The app did not scale to zero within the verification window.');
-    console.log('Zero replicas confirmed. Checking cold-start session and history persistence.');
-    const resumed = await (await request('/api/me', { cookie: alice.cookie })).json();
-    assert.equal(resumed.user.id, alice.user.id);
-    assert.ok(resumed.history.some((entry) => entry.gameId === gameId));
-    console.log('Cold-start wake-up and PostgreSQL persistence verified.');
-  }
 } finally {
   if (activeGame && participant?.connected) {
     try { await emit(participant, 'game:resign', { gameId: activeGame }); }

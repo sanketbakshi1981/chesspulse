@@ -4,6 +4,7 @@ import { formatScore, scoreToPercent, uciToMove } from './uci.mjs';
 
 const pieceImage = (piece) => `/img/chesspieces/wikipedia/${piece}.png`;
 const RESULT_TEXT = { '1-0': 'White wins', '0-1': 'Black wins', '1/2-1/2': 'Draw' };
+const formatDelta = (value) => `${value >= 0 ? '+' : ''}${value}`;
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -13,6 +14,12 @@ const el = (tag, props = {}, ...children) => {
 };
 
 const socket = io({ autoConnect: false });
+const compactLayout = window.matchMedia('(max-width: 1050px)');
+const syncGameTools = () => {
+  $('game-tools').open = !compactLayout.matches;
+};
+compactLayout.addEventListener('change', syncGameTools);
+syncGameTools();
 
 const state = {
   me: null,
@@ -37,6 +44,7 @@ const state = {
   registering: false,
   reviewPly: 0,
   analysisVariation: false,
+  reviewing: false,
 };
 
 const engine = new Engine({
@@ -51,13 +59,28 @@ const engine = new Engine({
   },
 });
 
+async function readApiResponse(response) {
+  const body = await response.text();
+  const retryMessage = `Please try again. If this keeps happening, restart the app with npm start. (HTTP ${response.status})`;
+  if (!body.trim()) throw new Error(`The server sent an empty response. ${retryMessage}`);
+  let result;
+  try {
+    result = JSON.parse(body);
+  } catch (error) {
+    throw new Error(`The server sent an unreadable response. ${retryMessage}`, { cause: error });
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    throw new Error(`The server sent an unexpected response. ${retryMessage}`);
+  }
+  if (!response.ok) throw new Error(typeof result.error === 'string' && result.error ? result.error : `Request failed (HTTP ${response.status}). Please try again.`);
+  return result;
+}
+
 async function api(url, data) {
   const response = await fetch(url, data === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
-  return result;
+  return readApiResponse(response);
 }
 
 function showError(error) { $('app-error').textContent = error.message || String(error); }
@@ -96,6 +119,7 @@ $('checkin-form').addEventListener('submit', async (e) => {
 });
 
 function applySession(data) {
+  const signingIn = $('app').hidden;
   if (state.me && state.me.id !== data.user.id) {
     setEngineEnabled(false);
     state.game = null;
@@ -103,6 +127,7 @@ function applySession(data) {
     state.chess = new Chess();
     state.reviewPly = 0;
     state.analysisVariation = false;
+    state.reviewing = false;
     state.incoming.clear();
     state.outgoing = null;
   }
@@ -114,11 +139,10 @@ function applySession(data) {
   $('app').hidden = false;
   $('logout-btn').hidden = false;
   $('me').textContent = data.user.name;
-  $('visibility-toggle').checked = data.user.visible;
   $('profile-stats').replaceChildren(
-    el('dt', { textContent: '10+0 rating' }), el('dd', { textContent: `${data.user.rating}${data.user.provisional ? ` (provisional ${data.user.ratedGames}/${data.user.provisionalGames})` : ''}` }),
-    el('dt', { textContent: 'Lifetime XP' }), el('dd', { textContent: data.user.xp }),
+    el('dt', { textContent: 'Total XP' }), el('dd', { className: 'xp-total', textContent: `${data.user.xp} XP` }),
     el('dt', { textContent: 'Quest Rank' }), el('dd', { textContent: data.user.questRank }),
+    el('dt', { className: 'rating-stat', textContent: 'Chess rating (10+0)' }), el('dd', { className: 'rating-stat', textContent: `${data.user.rating}${data.user.provisional ? ` (provisional ${data.user.ratedGames}/${data.user.provisionalGames})` : ''}` }),
   );
   $('history').replaceChildren(...data.history.map((game) => el('li', {}, el('button', {
     className: 'secondary', textContent: `${game.white} vs ${game.black}: ${game.result}`,
@@ -128,9 +152,11 @@ function applySession(data) {
         const recap = await api(`/api/games/${game.gameId}`);
         if (state.mode === 'game') throw new Error('A new match started. Finish it before opening a recap.');
         receiveGame(recap);
+        startReview();
       } catch (error) { showError(error); }
     },
   }))));
+  $('history-empty').hidden = data.history.length > 0;
   if (data.game) receiveGame(data.game);
   else {
     if (state.mode === 'game' && state.game) {
@@ -141,6 +167,7 @@ function applySession(data) {
     }
     render();
   }
+  if (signingIn) window.scrollTo(0, 0);
 }
 
 socket.on('connect', () => {
@@ -151,6 +178,7 @@ socket.on('connect', () => {
 socket.on('session', applySession);
 socket.on('profile', applySession);
 socket.on('disconnect', (reason) => {
+  state.players = [];
   $('connection').textContent = 'Disconnected — clocks continue; reconnecting…';
   render();
   if (reason === 'io server disconnect') {
@@ -177,10 +205,6 @@ $('logout-btn').addEventListener('click', async () => {
     socket.disconnect();
     location.reload();
   } catch (error) { showError(error); }
-});
-$('visibility-toggle').addEventListener('change', async (event) => {
-  try { state.me = (await api('/api/profile/visibility', { visible: event.target.checked })).user; }
-  catch (error) { event.target.checked = state.me.visible; showError(error); }
 });
 
 // ---------- Lobby ----------
@@ -251,7 +275,7 @@ $('find-match-btn').addEventListener('click', async () => {
   try {
     await send('matchmaking:join');
     state.queued = state.mode !== 'game';
-    setLobbyStatus(state.queued ? 'Finding a 10+0 opponent near your rating. The range expands as you wait.' : '');
+    setLobbyStatus(state.queued ? 'Looking for your quest buddy! We match players with similar chess ratings.' : '');
     renderLobby();
   } catch (error) { setLobbyStatus(error.message); }
 });
@@ -263,10 +287,15 @@ $('cancel-queue-btn').addEventListener('click', async () => {
 function renderLobby() {
   const inGame = state.mode === 'game';
   $('find-match-btn').disabled = inGame || state.queued || !socket.connected;
+  $('find-match-btn').textContent = state.queued ? 'Finding your quest buddy...' : 'Start a quest · 10 min';
   $('cancel-queue-btn').hidden = !state.queued;
   $('cancel-challenge-btn').hidden = !state.outgoing;
   $('challenge-form').querySelector('button').disabled = inGame || !socket.connected;
   $('online-count').textContent = state.players.length;
+  $('players-empty').hidden = state.players.length > 0;
+  $('players-empty').textContent = socket.connected
+    ? 'No players online yet. You can still invite a friend or start a quest.'
+    : 'Connecting... Online players will appear when you are connected.';
   const list = $('players');
   list.replaceChildren();
   for (const p of state.players) {
@@ -316,6 +345,9 @@ function renderLobby() {
 function receiveGame(game) {
   if (state.game?.gameId === game.gameId && state.game.version > game.version) return;
   const starting = !game.result && (state.mode !== 'game' || state.game?.gameId !== game.gameId);
+  const finishing = game.result && state.game?.gameId === game.gameId && !state.game.result;
+  if (!game.result) state.reviewing = false;
+  else if (state.game?.gameId !== game.gameId || !state.game?.result) state.reviewing = true;
   state.mode = game.result ? 'analysis' : 'game';
   state.game = game;
   state.myColor = game.white.id === state.me.id ? 'w' : 'b';
@@ -335,6 +367,7 @@ function receiveGame(game) {
   state.analysisVariation = false;
   if (!game.result) setEngineEnabled(false);
   render();
+  if (finishing) $('review-back-btn').scrollIntoView({ block: 'start' });
 }
 socket.on('game:update', receiveGame);
 
@@ -388,11 +421,11 @@ $('board').addEventListener('click', (event) => {
 });
 
 new ResizeObserver(() => {
-  if (board && !$('app').hidden) {
+  if (board && !$('app').hidden && $('board').getBoundingClientRect().width > 0) {
     board.resize();
     renderBoard();
   }
-}).observe($('board-area'));
+}).observe($('board'));
 
 function createBoard() {
   return Chessboard('board', {
@@ -569,8 +602,10 @@ function renderQuests() {
   if (!game || game.result) return;
   $('own-quests').replaceChildren(...game.ownQuests.map((q) => el('li', {
     className: q.completedAtPly !== null ? 'completed' : '',
-    textContent: `${q.title} · ${q.level} · ${q.baseXp} XP${q.completedAtPly !== null ? ` — completed on ply ${q.completedAtPly}` : ' — in progress'}`,
-  })));
+  }, el('strong', { textContent: q.title }), el('span', {
+    className: 'quest-meta',
+    textContent: `${q.level} · ${q.baseXp} base XP · ${q.completedAtPly !== null ? `completed on ply ${q.completedAtPly}` : 'In progress'}`,
+  }))));
   $('guess-count').textContent = `${game.guessesRemaining} of ${game.guessLimit} guesses remaining. The clock keeps running.`;
   const previous = $('guess-picker').value;
   $('guess-picker').replaceChildren(...state.catalog.filter((q) => q.enabled).map((q) => el('option', {
@@ -589,25 +624,39 @@ function renderQuests() {
 
 function renderRecap() {
   const game = state.game;
+  (state.reviewing ? $('side-panel') : $('lobby-panel')).prepend($('recap'));
   $('recap').hidden = !game?.recap;
   if (!game?.recap) return;
   const recap = game.recap;
-  $('recap').replaceChildren(el('h2', { textContent: 'Mission debrief' }),
+  const me = recap.players[state.myColor];
+  $('recap').replaceChildren(el('p', { className: 'eyebrow', textContent: 'Every game is part of your journey' }),
+    el('h2', { textContent: 'Adventure complete!' }),
+    el('div', { className: 'reward-summary', role: 'group', ariaLabel: 'Your game rewards' },
+      el('div', { className: 'reward-stat' }, el('span', { textContent: 'XP earned' }),
+        el('strong', { className: 'xp-award', textContent: `${formatDelta(me.total)} XP` })),
+      el('div', { className: 'reward-stat' }, el('span', { textContent: 'Chess rating' }),
+        el('strong', { className: me.ratingDelta < 0 ? 'rating-loss' : 'rating-gain', textContent: `${formatDelta(me.ratingDelta)} points` }))),
+    el('p', { className: 'reward-totals', textContent: `Total ${me.totalXp} XP · Rating ${me.ratingAfter}` }),
     el('p', { textContent: `${RESULT_TEXT[game.result]} · ${game.reason} · ${game.moves.length} plies` }),
+    el('button', { textContent: 'Review game board', hidden: state.reviewing, onclick: startReview }));
+  const details = el('details', { className: 'recap-details' },
+    el('summary', { textContent: 'Quests & reward details' }),
     el('p', { className: 'muted', textContent: recap.xpEligible ? `Quest XP awarded. Rating is calculated independently using Elo K=${game.eloK}.` : `No XP awarded: ${recap.flags.join(', ')}. Chess rating is calculated independently.` }));
   for (const player of Object.values(recap.players)) {
     const section = el('section', { className: 'recap-player' },
       el('h3', { textContent: player.name }),
-      el('p', { textContent: `Rating ${player.ratingBefore} → ${player.ratingAfter} (${player.ratingDelta >= 0 ? '+' : ''}${player.ratingDelta}) · +${player.total} XP · Lifetime ${player.totalXp} XP` }));
+      el('p', { className: 'xp-award', textContent: `${formatDelta(player.total)} XP` }),
+      el('p', { textContent: `Total ${player.totalXp} XP · Rating ${player.ratingBefore} → ${player.ratingAfter} (${formatDelta(player.ratingDelta)})` }));
     for (const q of player.quests) {
       section.append(el('p', { textContent: `${q.title}: ${q.completedAtPly === null ? 'not completed' : `completed at ply ${q.completedAtPly}, ${q.evidence.san} (${q.evidence.uci})`}` }));
       if (q.evidence) section.append(el('details', {}, el('summary', { textContent: 'Completion evidence' }),
         el('p', { className: 'evidence', textContent: `At ${new Date(q.completedAt).toISOString()} · FEN ${q.evidence.fen}` })));
     }
-    section.append(el('p', { textContent: `Guesses: ${player.guesses.length ? player.guesses.map((g) => `${g.questId} ${g.correct ? 'correct' : 'incorrect/ineligible'} at ${new Date(g.submittedAt).toISOString()}`).join('; ') : 'none'}` }));
-    section.append(el('p', { textContent: `XP events: ${player.events.map((e) => `${e.source} ${e.questId} +${e.baseAmount}`).join(', ') || 'none'} · multiplier ×${player.multiplier} · final ${player.total} (rounded down once; eligibility applied).` }));
-    $('recap').append(section);
+    section.append(el('p', { className: 'recap-guesses', textContent: `Guesses: ${player.guesses.length ? player.guesses.map((g) => `${state.catalog.find((q) => q.questId === g.questId)?.title || g.questId} — ${g.correct ? 'correct' : 'incorrect/ineligible'}`).join('; ') : 'none'}` }));
+    section.append(el('p', { textContent: `XP events: ${player.events.map((e) => `${e.source} ${e.questId} +${e.baseAmount}`).join(', ') || 'none'} · multiplier ×${player.multiplier} · final ${player.total} XP (eligibility applied).` }));
+    details.append(section);
   }
+  $('recap').append(details);
 }
 
 function renderMoves() {
@@ -690,6 +739,9 @@ document.addEventListener('keydown', (event) => {
 
 function render(analyze = true) {
   const inGame = state.mode === 'game';
+  document.body.classList.toggle('active-game', inGame);
+  document.body.classList.toggle('reviewing', state.reviewing);
+  $('review-back-btn').hidden = !state.reviewing;
   $('resign-btn').hidden = !inGame;
   $('draw-btn').hidden = !inGame;
   $('draw-btn').disabled = Boolean(state.game?.drawOffer);
@@ -716,6 +768,19 @@ function render(analyze = true) {
   renderRecap();
   if (analyze || state.engineFen !== state.chess.fen()) requestAnalysis();
 }
+
+function startReview() {
+  if (!state.game?.result || state.mode === 'game') return;
+  state.reviewing = true;
+  render(false);
+  $('review-back-btn').scrollIntoView({ block: 'start' });
+}
+$('review-back-btn').addEventListener('click', () => {
+  state.reviewing = false;
+  setEngineEnabled(false);
+  render(false);
+  $('lobby').scrollIntoView({ block: 'start' });
+});
 
 $('flip-btn').addEventListener('click', () => {
   state.orientation = state.orientation === 'w' ? 'b' : 'w';
@@ -810,11 +875,14 @@ function renderEngine() {
 }
 
 render();
+$('checkin-error').textContent = '';
+$('auth-submit').disabled = false;
+$('auth-switch').disabled = false;
 
 try {
   const response = await fetch('/api/me');
   if (response.ok) {
-    applySession(await response.json());
+    applySession(await readApiResponse(response));
     socket.connect();
   } else if (response.status !== 401) {
     throw new Error('Could not restore your session. Refresh to retry.');

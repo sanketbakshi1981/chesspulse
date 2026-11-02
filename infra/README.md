@@ -1,283 +1,269 @@
-# Low-cost Azure Container Apps deployment
+# Simple Azure deployment: App Service + PostgreSQL
 
-The app runs on **Container Apps Consumption, 0–1 replicas**, with **PostgreSQL
-Flexible Server B1ms**, 32 GiB storage, private VNet connectivity, verified TLS,
-seven-day backups and no high availability. Azure supplies HTTPS and WebSockets.
-The image is private in a Basic Azure Container Registry. Local development still
-uses SQLite. This deployment starts with an empty database; it does not migrate
-local accounts or games.
+The production architecture is:
 
-There is no App Service plan, VM, Redis, SignalR service, dedicated workload
-profile, NAT gateway, private endpoint, Log Analytics workspace, budget resource,
-email notification or spending cap. Budget monitoring is managed separately by
-the subscription owner.
-
-## Idle scaling and game safety
-
-HTTP requests wake the app. A tiny Azure Storage queue also acts as a KEDA activity
-signal: while authenticated sockets are connected **or games are still active**,
-the app renews a marker every 30 seconds. This keeps clocks, presence and
-matchmaking running without relying on WebSocket upgrades being counted as new
-HTTP requests. After the last player disconnects and no games remain, the marker
-is removed and the app can scale to zero after the five-minute cooldown.
-
-The marker expires after two minutes if the process crashes. It contains only the
-word `active`, never identities, game records or quest data. Managed identity
-authorizes queue access; storage account keys are disabled. The application uses
-the documented Container Apps local managed-identity REST endpoint to obtain a
-cached storage token, avoiding interactive login libraries in the runtime image.
-
-The first request after idle has a cold start. PostgreSQL, registry storage and
-DNS remain billable when app replicas are zero. A signed-in open tab counts as
-usage and keeps the app awake. Do not configure external frequent health polling
-if you want it to sleep. Platform health probes are internal.
-
-**Run one process and at most one active revision.** PostgreSQL's advisory lock
-rejects another app process because presence and queues are in memory. Do not
-scale above one replica or point a staging app at the same database. Deployments
-deliberately deactivate the previous revision before starting the replacement;
-schedule them between matches. Clocks continue through downtime.
-
-## Cost and US-region choice
-
-Run a live read-only estimate, optionally supplying active hours per month:
-
-```bash
-node infra/estimate-cost.mjs centralus       # idle baseline
-node infra/estimate-cost.mjs centralus 100   # 100 active replica hours
-node infra/estimate-cost.mjs centralus 730   # continuously active
+```text
+Browser -- HTTPS / WebSockets --> Linux App Service B1 (one Node 24 process)
+                                         |
+                                  PostgreSQL over verified TLS
+                                         |
+                              PostgreSQL Flexible Server B1ms
+                              (public endpoint, IP firewall)
 ```
 
-Central US public USD rates checked October 28, 2026:
+An App Service plan supplies the web app's compute. There is no Container Apps
+environment, container registry, Docker build, runtime managed identity, activity
+queue, storage account, VNet or private DNS zone. GitHub deployment optionally uses
+a passwordless OIDC identity; it is not a runtime dependency.
+
+Local development still uses SQLite. Azure starts with a **new empty PostgreSQL
+database**; existing accounts and games are not migrated.
+
+## Cost and operating constraints
+
+Central US public USD list prices checked October 29, 2026:
 
 | Resource | Monthly estimate |
 | --- | ---: |
+| Linux App Service B1, 730 hours | $13.14 |
 | PostgreSQL B1ms, 730 hours | $14.02 |
 | PostgreSQL storage, 32 GiB | $4.16 |
-| Basic registry, approximately 730 hours | $5.07 |
-| **Idle baseline, before extras** | **$23.25** |
-| ACA 0.25 vCPU / 0.5 GiB, per active hour before grants | $0.027 |
+| **Baseline, whether idle or active** | **$31.32** |
 
-Private DNS, queue operations/storage, requests, excess backups, image storage
-beyond the registry allowance, egress and taxes are additional. Consumption
-grants can reduce compute charges, but are shared across the subscription and
-must not be assumed available. At 730 active hours, the estimate before grants
-is about $42.96 plus extras; with full monthly compute grants it is about $37.56
-plus extras. The **US$40 target is not a hard cap**.
+Run `node infra/estimate-cost.mjs centralus` to refresh the estimate using the
+[Azure Retail Prices API](https://prices.azure.com/api/retail/prices).
+Excess backups, optional monitoring, outbound bandwidth and taxes are additional.
+This is not a quote or spending cap. A calendar month may exceed 730 hours.
+Stopping the web app does **not** stop App Service plan charges. Both old and new
+infrastructure charge during migration overlap.
 
-The estimate uses the [Azure Retail Prices API](https://prices.azure.com/api/retail/prices);
-verify actual charges in [Azure Cost Management](https://portal.azure.com/).
-Do not enable dedicated profiles, planned maintenance or private endpoints
-without repricing: these can introduce fixed environment charges.
+Always On keeps the game maintenance loop alive without a queue or cold-start
+mechanism. The plan has **one instance**, and the startup command is
+`node src/server.js`, not a multi-worker process manager. Presence, matchmaking and
+challenges remain in memory; the PostgreSQL advisory lock rejects another owner.
+Do not scale out, use deployment slots with this database, or share it with another
+running app. Deploy between matches: publishing stops the app, replaces its ZIP
+package, starts it and checks database-backed `/healthz`. Clocks continue through
+downtime; reconnection restores persisted game state.
 
-**Central US is the selected region.** The previous East US 2 deployment failed
-to provision B1ms with `SkuNotAvailable`. Central US advertises B1ms without a
-reported restriction, but SKU listings do not guarantee live capacity. Confirm
-the actual deployment result and reprice any fallback region.
-Monitor B1ms CPU credits, memory and storage. Autogrow is disabled to prevent
-unplanned growth; increase storage deliberately before it fills.
+The database has 32 GiB storage, seven-day backups, no high availability and
+disabled autogrow. Monitor storage, memory and B1ms CPU credits. Confirm live SKU
+capacity before provisioning; an earlier East US 2 B1ms deployment was unavailable.
+B1 has no deployment slots or automatic scale-out.
 
-## Authenticate and verify availability
+## Public database, not unrestricted database
 
-Requires Azure CLI with Container Apps support and Bicep, Node 24, Docker with
-a running daemon, and curl. Do not paste credentials into chat or commit them.
-The deploying identity needs resource creation and role-assignment permission.
+PostgreSQL has a public endpoint, but the
+[firewall module](database-access.bicep) permits only the web app's reported
+**possible outbound IPs**. There is no `0.0.0.0` "allow all Azure services" rule
+and no internet-wide allow rule. These IPs can be shared with other Azure apps;
+database credentials and TLS remain essential. `require_secure_transport=on`
+and `PGSSLMODE=verify-full` enforce encrypted, certificate-verified connections.
 
-If `az` is missing, install it using the
-[official Azure CLI installation instructions](https://learn.microsoft.com/cli/azure/install-azure-cli).
-Run the following in a terminal in this repository. Complete device-code sign-in
-in your own browser; do not send the code, passwords or tokens through chat.
-Choose your own subscription from the account list, not an example subscription.
+Changing the App Service plan/tier or recreating the app can change its outbound
+IPs. Re-run the infrastructure deployment and verify the actual firewall before
+publishing after such a change. Incremental deployments add current IP rules but
+do not remove old ones: review `az postgres flexible-server firewall-rule list`
+and deliberately delete obsolete `app-<ip>` rules.
+
+No developer IP is allowed by default. For direct administration, temporarily
+allow only your current public IP, use verified TLS and remove the rule afterward.
+The deployment uses the provisioning administrator as the initial database user.
+Restrict app configuration access, create a least-privilege runtime database role
+and rotate credentials before a wider launch. Passwords must never be committed,
+pasted into chat, passed literally on the command line or written to logs.
+
+## Provision a new deployment
+
+Requires Azure CLI, Bicep, Node **24**, npm, zip and curl. Docker is needed only
+for optional local PostgreSQL tests, not deployment. Install Azure CLI using the
+[official instructions](https://learn.microsoft.com/cli/azure/install-azure-cli)
+if missing. These commands create billable resources; review costs first.
 
 ```bash
 az login --use-device-code
 az account list --query '[].{Name:name,Subscription:id,Default:isDefault}' -o table
 export AZURE_SUBSCRIPTION_ID="<your-subscription-id>"
 az account set --subscription "$AZURE_SUBSCRIPTION_ID"
-az account show --query '{Name:name,Subscription:id}' -o table
-
-az extension add --name containerapp --upgrade
-az bicep install
 export AZURE_LOCATION=centralus
-export AZURE_RESOURCE_GROUP=chessquest-mvp-centralus
+export AZURE_RESOURCE_GROUP=chessquest-appservice-centralus
 
-node --version
-docker info
-az bicep build --file infra/main.bicep --stdout > /dev/null
+az bicep install
+az provider register --namespace Microsoft.Web --wait
+az provider register --namespace Microsoft.DBforPostgreSQL --wait
 az postgres flexible-server list-skus --location "$AZURE_LOCATION" -o table
-az containerapp env workload-profile list-supported --location "$AZURE_LOCATION" -o table
-node infra/estimate-cost.mjs "$AZURE_LOCATION" 730
-```
+az webapp list-runtimes --os linux -o tsv
+# Confirm NODE:24-lts is offered, and Linux Basic B1 is available in this region.
+az appservice list-locations --sku B1 --linux-workers-enabled -o table
+# Regional availability does not guarantee this subscription has B1 quota.
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/providers/Microsoft.Web/locations/$AZURE_LOCATION/usages?api-version=2024-11-01" \
+  --query "value[?name.value=='B1' || name.value=='*'].{Quota:name.localizedValue,Used:currentValue,Limit:limit}" \
+  -o table
+node infra/estimate-cost.mjs "$AZURE_LOCATION"
 
-If you see `SubscriptionNotFound`, no subscriptions, a denied role assignment,
-or a region/SKU restriction, resolve it before provisioning. Template compilation
-does not check subscription permissions, quotas, live capacity or image startup.
-The deployment uses a private registry, so your deploying identity also needs
-permission to push images.
-
-Register the required providers if they are not already registered. Registration
-itself does not create billable resources:
-
-```bash
-for provider in Microsoft.App Microsoft.ContainerRegistry Microsoft.Network \
-  Microsoft.DBforPostgreSQL Microsoft.ManagedIdentity Microsoft.Storage; do
-  az provider register --namespace "$provider" --wait --output none
-done
-```
-
-Before creating resources, confirm the live estimate and configure cost alerts
-in Azure Cost Management if desired. Alerts do not stop spending. At continuous
-activity, this configuration can exceed a US$40/month target even without extras.
-Re-run the cost estimate and availability checks before choosing another region.
-
-## First deployment
-
-The templates default to the resource group's location. For a regional replacement,
-use a new resource group in the selected region; existing regional resources cannot
-be moved by changing `location`. Keep the old deployment until the replacement
-passes live verification, then deliberately remove only the obsolete deployment.
-Both deployments may incur charges during that overlap.
-
-These are real provisioning commands. The approved monthly cost is usage-based,
-and resources start charging as they are created.
-
-```bash
 npm ci
 npm test
-npx playwright install chromium      # once per local browser test environment
-npm run test:e2e
+az bicep build --file infra/main.bicep --stdout > /dev/null
+az bicep build --file infra/github-actions.bicep --stdout > /dev/null
 
 az group create --name "$AZURE_RESOURCE_GROUP" --location "$AZURE_LOCATION"
-az deployment group create --name registry \
-  --resource-group "$AZURE_RESOURCE_GROUP" --template-file infra/registry.bicep
-export AZURE_REGISTRY_NAME="$(az deployment group show --name registry \
-  --resource-group "$AZURE_RESOURCE_GROUP" --query properties.outputs.registryName.value -o tsv)"
-
-export IMAGE_TAG="$(date -u +%Y%m%d%H%M%S)"
-bash infra/publish.sh --build-only
-
 az deployment group what-if --resource-group "$AZURE_RESOURCE_GROUP" \
-  --template-file infra/main.bicep --parameters imageTag="$IMAGE_TAG"
+  --template-file infra/main.bicep
 az deployment group create --name chessquest \
-  --resource-group "$AZURE_RESOURCE_GROUP" --template-file infra/main.bicep \
-  --parameters imageTag="$IMAGE_TAG"
+  --resource-group "$AZURE_RESOURCE_GROUP" --template-file infra/main.bicep
 ```
 
 The CLI prompts for the secure `databasePassword` parameter. Generate at least
-16 characters with a password manager and keep it securely; never put it literally
-on the command line or in shell history. Use the same password for preview and
-deployment. The template outputs no secrets. Database credentials initially use
-the provisioning administrator: restrict configuration access, and provision a
-least-privilege runtime role and rotate credentials before a wider launch.
-The database has no public endpoint; do not expose it for development access.
+16 characters with a password manager and keep it securely. Use the same password
+for preview and deployment. The template outputs no secrets.
 
-The registry bootstrap is separate so the actual image exists before the
-container app starts. Managed identity pulls the image; registry admin access
-is disabled. The Docker context allowlist excludes local data, tests, Git history
-and deployment configuration. Production dependencies come from the lockfile.
+If preview reports `SubscriptionIsOverQuotaForSku`, request a B1 limit of at
+least one in that region, or choose another region with available quota. Update
+both `AZURE_LOCATION` and `AZURE_RESOURCE_GROUP` and repeat the availability,
+pricing and preview checks before provisioning. Do not select a more expensive
+tier merely to bypass quota.
 
-Get the app name and URL:
+Use the **new** resource group above, not the existing ACA resource group. The
+new PostgreSQL name includes `pg-public` because changing an existing privately
+networked server's networking is not this migration's strategy. The app initially
+has no code; publish only after infrastructure and firewall provisioning succeed:
 
 ```bash
-export AZURE_CONTAINER_APP_NAME="$(az deployment group show --name chessquest \
+export AZURE_WEBAPP_NAME="$(az deployment group show --name chessquest \
   --resource-group "$AZURE_RESOURCE_GROUP" --query properties.outputs.appName.value -o tsv)"
-az deployment group show --name chessquest --resource-group "$AZURE_RESOURCE_GROUP" \
-  --query properties.outputs.appUrl.value -o tsv
-```
-
-## Publish updates
-
-```bash
+export AZURE_PLAN_NAME="$(az deployment group show --name chessquest \
+  --resource-group "$AZURE_RESOURCE_GROUP" --query properties.outputs.planName.value -o tsv)"
+export AZURE_POSTGRES_NAME="$(az deployment group show --name chessquest \
+  --resource-group "$AZURE_RESOURCE_GROUP" --query properties.outputs.postgresName.value -o tsv)"
+az postgres flexible-server firewall-rule list --resource-group "$AZURE_RESOURCE_GROUP" \
+  --server-name "$AZURE_POSTGRES_NAME" -o table
 bash infra/publish.sh
 ```
 
-### Automatic deployment from GitHub
+The publisher stages only `src`, `public`, package manifests and lockfile-installed
+production dependencies. It does not upload local databases, `.env`, Git history,
+tests or infrastructure. It packages with Node 24 to match the server runtime.
+App Service mounts the ZIP read-only (`WEBSITE_RUN_FROM_PACKAGE=1`); the app uses
+PostgreSQL, not SQLite in that package. Platform-provided `PORT` is honored.
+No server-side build or registry is required. HTTPS and WebSockets are enabled,
+FTP and SCM basic authentication are disabled, and Azure CLI authenticates using
+your Azure identity.
 
-[The GitHub Actions workflow](../.github/workflows/azure.yml) tests pull requests
-and pushes to `main`. After a successful `main` run, it builds the checked-in
-source, pushes an image tagged with the commit SHA/run/attempt, and deploys to the
-existing Central US app. Manual runs are permitted only on `main`. Production
-deployments are serialized and never cancel an in-progress deployment.
+For later updates, run `bash infra/publish.sh` with the same two Azure environment
+variables. If deployment fails after stopping the app, the script returns an
+error, not success. Inspect deployment logs and retry with corrected code or a
+known-good checkout. If only startup/health fails, the app may already be running
+but unhealthy; diagnose it before declaring recovery. Do not start a second app
+against the same database to work around a failed deployment.
 
-This is push-based continuous deployment, not a Kubernetes reconciliation
-controller. It updates application images only; Bicep infrastructure changes
-still require an explicit preview and deployment. The workflow never receives a
-database password, registry password or Azure client secret.
+Adding a custom domain requires TLS setup and setting `APP_ORIGIN` to that exact
+HTTPS origin. The template resets it to the default App Service hostname on
+infrastructure redeployment.
 
-Create the dedicated passwordless deployment identity once as an Azure owner:
+## Automatic deployment from GitHub
+
+The [workflow](../.github/workflows/azure.yml) tests pull requests and pushes to
+`main`. Successful `main` runs deploy a production ZIP using Azure OIDC.
+Deployments are serialized and never cancel an in-progress deployment.
+Infrastructure changes still require explicit Bicep preview/deployment.
+
+Create the deployment identity once with an account that can create role
+assignments (register `Microsoft.ManagedIdentity` first if necessary):
 
 ```bash
+az provider register --namespace Microsoft.ManagedIdentity --wait
 az deployment group create --name github-actions \
   --resource-group "$AZURE_RESOURCE_GROUP" \
   --template-file infra/github-actions.bicep \
-  --parameters registryName="$AZURE_REGISTRY_NAME" appName="$AZURE_CONTAINER_APP_NAME" \
+  --parameters appName="$AZURE_WEBAPP_NAME" planName="$AZURE_PLAN_NAME" \
   --query properties.outputs
 ```
 
 In GitHub **Settings > Environments**, create `production`, allow only the `main`
-branch to deploy (selected deployment branches), and leave required reviewers
-disabled for automatic releases. Add these environment **variables**, not secrets:
+branch to deploy and add these environment **variables**, not secrets:
 
 | Variable | Value |
 | --- | --- |
 | `AZURE_CLIENT_ID` | `clientId` output from the identity deployment |
 | `AZURE_TENANT_ID` | `tenantId` output |
 | `AZURE_SUBSCRIPTION_ID` | `subscriptionId` output |
-| `AZURE_RESOURCE_GROUP` | `chessquest-mvp-centralus` |
-| `AZURE_REGISTRY_NAME` | Central US registry name |
-| `AZURE_CONTAINER_APP_NAME` | Central US app name |
+| `AZURE_RESOURCE_GROUP` | `chessquest-appservice-centralus` |
+| `AZURE_WEBAPP_NAME` | New web app name |
 
-The identity trusts only this repository's `production` environment. It has
-`AcrPush` on the one registry, `Container Apps Contributor` on the one app and
-its environment (including read/join permission, not environment configuration
-write permission), and `Managed Identity Operator` on the app's runtime identity
-so updates can retain that identity. It has no subscription-wide Contributor/Owner.
-Environment branch restrictions are required to prevent another branch from
-requesting the same environment identity. Protect `main` and review workflow
-changes before merging. Anyone able to deploy can run code with the app's runtime
-permissions; OIDC removes long-lived credentials, not that trust boundary.
+The identity has **Website Contributor scoped to this web app only** and **Reader
+on its plan** so the publisher can check the single-instance constraint. It has
+no subscription-wide Contributor or access to provision PostgreSQL. The workflow
+does not receive a database password, publishing password or Azure client secret.
+Protect `main`, review workflow changes and restrict the environment's branches:
+anyone allowed to deploy code can exercise that code's database permissions.
+All source and deployment changes must be committed before GitHub can deploy them.
+CI tests use a disposable PostgreSQL service, never production.
 
-Before the first run, ensure GitHub Actions is enabled and all application,
-lockfile, Docker and infrastructure files are committed. Uncommitted workspace
-changes are not available to the runner. Configure the `test` job as a required
-branch status check if desired. CI runs unit tests and PostgreSQL/browser tests
-against a disposable service database, never production.
+## Custom domain: questoc.com
 
-The script builds/pushes a uniquely tagged image, temporarily switches to multiple
-revision management solely to deactivate all old revisions, deploys the new
-image, restores single-revision mode, and verifies database-backed `/healthz`.
-There are deliberately no overlapping database owners. If updating fails after
-deactivation, inspect the error and reactivate the previous known-good revision
-before restoring single-revision mode. Do not treat a failed publish as success.
-Retain only a few known-good image tags to avoid registry storage overages.
+The Azure DNS zone `questoc.com` is in `chessquest-appservice-westus2`.
+Registration remains at Namecheap, with Custom DNS nameservers:
 
-Adding a custom domain requires TLS setup and setting `APP_ORIGIN` to that exact
-HTTPS origin. The template uses the default ACA hostname and resets this setting
-on infrastructure redeployment.
-
-## Verify the live deployment
-
-1. Use two browser profiles to register users, queue/challenge and play.
-2. Verify secure cookies, private quests, guesses, recap and independent ratings.
-3. Disconnect/reconnect and confirm board and clocks converge.
-4. Verify active sockets/games maintain a queue signal and a replica.
-5. Close all tabs and finish or let games expire. Wait through marker expiry and
-   cooldown; confirm `az containerapp replica list` returns no replicas.
-6. Visit again, verify the cold start and persistent identity/history.
-
-With the Azure environment variables set, this automated check creates two hidden
-smoke-test accounts and a short game, then verifies zero replicas and cold-start
-session/history persistence without periodically waking the app:
-
-```bash
-node infra/smoke-test.mjs "https://your-app-hostname" --idle-check
+```text
+ns1-01.azure-dns.com
+ns2-01.azure-dns.net
+ns3-01.azure-dns.org
+ns4-01.azure-dns.info
 ```
 
-Runtime stderr logs are available through `az containerapp logs show`; no
-persistent logging workspace is provisioned. Do not log passwords, tokens,
-identity headers or private quest payloads. Validate PostgreSQL point-in-time
-restore before relying on valuable production data; restoring creates a billable
-server. This MVP configuration is not highly available.
+The apex A record points to App Service's inbound IP `20.115.232.33`;
+`www` is a CNAME to `chessquest-web-72ydyurqniopa.azurewebsites.net`.
+Keep the `asuid` and `asuid.www` TXT ownership records. Both names require
+App Service hostname bindings and separate free managed certificates with
+SNI bindings. DNS records alone do not enable HTTPS or HTTP redirects.
+Azure DNS has ongoing zone/query charges. Namecheap email forwarding is not
+used and was not migrated; configure an email provider before using domain email.
+
+After both certificate bindings are ready, set `APP_ORIGIN=https://questoc.com`
+and `APP_REDIRECT_HOST=www.questoc.com`. Deploy the server with redirect support
+before enabling that setting. The alias returns a permanent 308 redirect to the
+canonical HTTPS origin, preserving the path/query. Only the canonical origin is
+allowed for browser API and Socket.IO requests. The Azure hostname remains
+available for deployment health checks, but is no longer the browser app origin.
+Users must sign in again on the new domain; cookies do not transfer between hosts.
+
+For subsequent infrastructure deployments, pass
+`--parameters appOrigin=https://questoc.com appRedirectHost=www.questoc.com`
+to both what-if and deployment commands, or the template defaults will restore
+the Azure origin and disable the redirect. These parameters do not provision DNS
+or certificates. Recheck the inbound IP after recreating/moving the app, and
+keep DNS pointed directly at App Service for managed certificate renewal.
+
+## Verify and retire the old ACA deployment
+
+1. Verify the new site's `/healthz`, HTTPS, secure cookies and public-origin checks.
+2. Use two browser profiles to register, pair, play, guess and inspect recap.
+3. Disconnect/reconnect and confirm board, clocks and private quests converge.
+4. Run the smoke test below. It creates two accounts and a short game:
+
+   ```bash
+   node infra/smoke-test.mjs "https://your-app.azurewebsites.net" --connection-check
+   ```
+
+5. Restart the web app and confirm a browser session, game/history and ratings
+   persist. This verifies PostgreSQL durability; there is no scale-to-zero test.
+6. Point GitHub's production variables (and any custom domain) at the new app.
+   Remove obsolete `AZURE_REGISTRY_NAME` and `AZURE_CONTAINER_APP_NAME` variables.
+7. Only after these checks pass, inspect the old resource group in Azure. Confirm
+   it contains only obsolete Chess Quest resources and no shared dependencies.
+   Remove the old ACA app/environment, PostgreSQL, registry, queue/storage, VNet,
+   private DNS and identities/role assignments, or delete the old group through
+   the portal after confirming its exact contents. No old data is being retained.
+   Check for abandoned resources from earlier regional deployment attempts too.
+8. Verify Cost Management no longer shows ongoing usage from the retired
+   resources. Deploying this template in incremental mode never removes them.
+
+Runtime logs are available through App Service's **Log stream**; enable filesystem
+application logging temporarily for troubleshooting. No paid monitoring workspace
+is provisioned. Do not log passwords, tokens or private quest payloads.
+Validate PostgreSQL point-in-time restore before relying on valuable production
+data; a restore creates another billable server. This MVP is not highly available.
 
 ## Local PostgreSQL tests
 
@@ -292,17 +278,12 @@ docker exec chessquest-pg-test pg_isready -U postgres
 export PGHOST=127.0.0.1 PGPORT=54329 PGDATABASE=chessquest_test PGUSER=postgres
 export PGPASSWORD=local-test-password PGSSLMODE=disable
 npm run test:postgres
+npx playwright install chromium
 TEST_POSTGRES=1 npm run test:e2e
 docker rm -f chessquest-pg-test
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE
 ```
 
 `PGSSLMODE=disable` is rejected in production. Cloud PostgreSQL connections verify
-the certificate and hostname. Connection loss is logged and terminates the app
-instead of continuing without authoritative storage.
-
-To retire the deployment, first retain any required data export and confirm the
-resource group contains only these resources. Then deliberately delete that
-resource group in Azure. This irreversibly removes the database, backups,
-registry, app and networking. Scaling the app to zero does not delete these
-resources or end their charges.
+the server certificate and hostname; never disable verification to bypass a
+connection error.

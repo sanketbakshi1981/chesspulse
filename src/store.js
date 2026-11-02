@@ -100,7 +100,7 @@ class Store {
       selfReportedRating: user.external_rating, rating: user.rating, xp: user.xp,
       ratedGames: user.rated_games, provisional: user.rated_games < RULES.provisionalGames,
       provisionalGames: RULES.provisionalGames,
-      questRank: rank(user.xp), visible: Boolean(user.visible),
+      questRank: rank(user.xp),
     };
   }
 
@@ -153,7 +153,6 @@ class Store {
   }
 
   async logout(token) { await this.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token)); }
-  async visibility(id, visible) { await this.db.prepare('UPDATE users SET visible=? WHERE id=?').run(Number(visible), id); }
   async saveGame(game) {
     const data = JSON.stringify({ ...game, chess: undefined });
     await this.db.prepare(`INSERT INTO games(id,data,finished) VALUES (?,?,?)

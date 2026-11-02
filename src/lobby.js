@@ -62,7 +62,7 @@ class Lobby {
     const players = [];
     for (const id of ids) {
       const u = await this.store.user(id);
-      if (u.visible) players.push({
+      players.push({
         id: u.id, name: u.name, rating: u.rating, status: await this.activeId(u.id) ? 'in_game' : 'online',
       });
     }
@@ -310,6 +310,7 @@ class Lobby {
         ...game.assignments[color].filter((q) => q.completedAtPly !== null).map((q) => ({ source: 'quest', questId: q.questId, baseAmount: q.baseXp })),
         ...game.guesses[color].filter((g) => g.correct).map((g) => ({ source: 'guess', questId: g.questId, baseAmount: game.rules.guessXp })),
       ];
+      // Older games can have odd base rewards; current awards are multiples of 10.
       const total = xpEligible ? Math.floor(events.reduce((sum, e) => sum + e.baseAmount, 0) * multiplier) : 0;
       const after = user.rating + (color === 'w' ? change : -change);
       const ledger = { events, multiplier, total, flags };

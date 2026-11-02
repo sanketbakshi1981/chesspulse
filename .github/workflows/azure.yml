@@ -73,9 +73,7 @@ jobs:
       id-token: write
     env:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-      AZURE_REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
-      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
-      IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,23 +88,23 @@ jobs:
           : "${AZURE_TENANT_ID:?Set the production AZURE_TENANT_ID variable}"
           : "${AZURE_SUBSCRIPTION_ID:?Set the production AZURE_SUBSCRIPTION_ID variable}"
           : "${AZURE_RESOURCE_GROUP:?Set the production AZURE_RESOURCE_GROUP variable}"
-          : "${AZURE_REGISTRY_NAME:?Set the production AZURE_REGISTRY_NAME variable}"
-          : "${AZURE_CONTAINER_APP_NAME:?Set the production AZURE_CONTAINER_APP_NAME variable}"
+          : "${AZURE_WEBAPP_NAME:?Set the production AZURE_WEBAPP_NAME variable}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Install Container Apps CLI support
-        run: az extension add --name containerapp --upgrade --only-show-errors
-      - name: Build, push and deploy immutable image
+      - name: Package and deploy to App Service
         run: bash infra/publish.sh
       - name: Record application URL
         id: endpoint
         run: |
-          host="$(az containerapp show --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_CONTAINER_APP_NAME" \
-            --query properties.configuration.ingress.fqdn -o tsv)"
+          host="$(az webapp show --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" --query defaultHostName -o tsv)"
           echo "url=https://${host}" >> "$GITHUB_OUTPUT"
-          echo "Deployed image tag: \`${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployed commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Application: https://${host}" >> "$GITHUB_STEP_SUMMARY"

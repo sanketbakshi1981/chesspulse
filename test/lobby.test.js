@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Lobby, normalizeName } = require('../src/lobby');
 const { CATALOG } = require('../src/quests');
+const RULES = require('../src/rules');
 const { testStore } = require('./helpers/store');
 
 async function fixture(t, options = {}) {
@@ -65,23 +66,25 @@ test('persistent identity validates ratings, hashes passwords and derives provis
   assert.equal((await store.session(token)), undefined);
 });
 
-test('presence defaults private, handles multiple tabs, expiry and match availability', async (t) => {
+test('presence automatically lists connected users, handles multiple tabs, expiry and match availability', async (t) => {
   const f = await fixture(t);
   const { lobby, store, alice, bob } = f;
-  assert.deepEqual((await lobby.listPlayers()), []);
-  (await store.visibility(alice.id, true));
-  assert.equal((await lobby.listPlayers()).length, 1);
+  assert.equal((await store.user(alice.id)).visible, 0, 'legacy visibility flags do not hide connected players');
+  assert.deepEqual((await lobby.listPlayers()).map((player) => player.name), ['Alice', 'Bob']);
   lobby.connect(alice.id, 'a2');
   lobby.disconnect('a');
   assert.equal((await lobby.presence(alice.id)), 'online');
+  assert.equal((await lobby.listPlayers()).length, 2, 'multiple tabs count as one player');
   (await f.start());
   assert.equal((await lobby.listPlayers())[0].status, 'in_game');
   lobby.disconnect('a2');
   assert.equal((await lobby.presence(alice.id)), 'offline');
+  assert.deepEqual((await lobby.listPlayers()).map((player) => player.name), ['Bob']);
   assert.ok((await lobby.activeId(alice.id)), 'disconnect does not forfeit');
   f.advance(60_001);
   (await lobby.tick());
   assert.equal((await lobby.presence(bob.id)), 'offline');
+  assert.deepEqual(await lobby.listPlayers(), []);
 });
 
 test('queue expands by rating, pairs once, and challenge acceptance cannot duplicate games', async (t) => {
@@ -104,7 +107,7 @@ test('queue expands by rating, pairs once, and challenge acceptance cannot dupli
   assert.ok((await lobby.start(alice.id, alice.id)).error);
 });
 
-test('direct hidden-player challenges and acceptance are single-use', async (t) => {
+test('direct player challenges and acceptance are single-use', async (t) => {
   const { lobby, alice, bob, store } = await fixture(t);
   assert.equal((await lobby.challenge(alice.id, 'Bob')).to.id, bob.id);
   assert.ok((await lobby.respond(bob.id, alice.id, true)).game);
@@ -169,7 +172,61 @@ test('guess attempts reject repeats, throttle, stop at two, and cannot complete 
   assert.match((await f.lobby.act(f.alice.id, 'completeQuest', { gameId: game.id, questId: 'E01' })).error, /Unknown/);
 });
 
-test('quest completion, guesses, XP rounding, independent Elo and finalization are reproducible', async (t) => {
+test('new base XP is a multiple of 10 and all reward combinations yield exact whole XP', () => {
+  const amounts = Object.values(RULES.xpByLevel);
+  for (const amount of [...amounts, RULES.guessXp, ...CATALOG.map((q) => q.baseXp)]) {
+    assert.ok(amount > 0);
+    assert.equal(amount % 10, 0);
+  }
+  const questTotals = [0, ...amounts, ...amounts.flatMap((first) => amounts.map((second) => first + second))];
+  for (const questTotal of questTotals) {
+    for (let guesses = 0; guesses <= 2; guesses++) {
+      for (const multiplier of Object.values(RULES.multipliers)) {
+        assert.ok(Number.isInteger((questTotal + guesses * RULES.guessXp) * multiplier));
+      }
+    }
+  }
+});
+
+test('guess-only rewards are exact for a loss, draw and win', async (t) => {
+  for (const [result, expected] of [['loss', 5], ['draw', 10], ['win', 20]]) {
+    await t.test(result, async (t) => {
+      const f = await fixture(t);
+      const game = await f.start();
+      await setQuest(f.store, f.lobby, game.id, 'w', 'E02');
+      await setQuest(f.store, f.lobby, game.id, 'b', 'E02');
+      assert.ok((await f.lobby.act(f.alice.id, 'guess', { gameId: game.id, questId: 'E02' })).ok);
+      await play(f, game);
+      let finished;
+      if (result === 'draw') {
+        await f.lobby.act(f.alice.id, 'offerDraw', { gameId: game.id });
+        finished = (await f.lobby.act(f.bob.id, 'respondDraw', { gameId: game.id, accept: true })).game;
+      } else {
+        finished = (await f.lobby.act(result === 'loss' ? f.alice.id : f.bob.id, 'resign', { gameId: game.id })).game;
+      }
+      const reward = finished.recap.players.w;
+      assert.deepEqual(reward.events, [{ source: 'guess', questId: 'E02', baseAmount: 10 }]);
+      assert.equal(reward.total, expected);
+      assert.equal((await f.store.user(f.alice.id)).xp, expected);
+    });
+  }
+});
+
+test('legacy active games retain their snapshotted odd base XP and rounding', async (t) => {
+  const f = await fixture(t);
+  const game = await f.start();
+  game.rules.guessXp = 15;
+  await f.store.saveGame(game);
+  await setQuest(f.store, f.lobby, game.id, 'w', 'E01');
+  await setQuest(f.store, f.lobby, game.id, 'b', 'E02');
+  await f.lobby.act(f.alice.id, 'guess', { gameId: game.id, questId: 'E02' });
+  await play(f, game);
+  const finished = (await f.lobby.act(f.alice.id, 'resign', { gameId: game.id })).game;
+  assert.equal(finished.recap.players.w.total, 17);
+  assert.equal(finished.recap.players.w.events.find((event) => event.source === 'guess').baseAmount, 15);
+});
+
+test('quest completion, exact XP, independent Elo and finalization are reproducible', async (t) => {
   const f = await fixture(t);
   const game = (await f.start());
   (await setQuest(f.store, f.lobby, game.id, 'w', 'E01'));
@@ -181,17 +238,17 @@ test('quest completion, guesses, XP rounding, independent Elo and finalization a
   assert.equal(complete.completedAtPly, 5);
   assert.equal(complete.evidence.san, 'Nxd7');
   const result = (await f.lobby.act(f.alice.id, 'resign', { gameId: game.id })).game;
-  assert.equal(result.recap.players.w.total, 17);
-  assert.equal(result.recap.players.b.total, 30);
+  assert.equal(result.recap.players.w.total, 15);
+  assert.equal(result.recap.players.b.total, 20);
   assert.equal(result.recap.players.w.ratingDelta, -16);
   assert.equal(result.recap.players.b.ratingDelta, 16);
-  assert.equal((await f.store.user(f.alice.id)).xp, 17);
+  assert.equal((await f.store.user(f.alice.id)).xp, 15);
   assert.equal((await f.store.user(f.alice.id)).rating, 984);
   assert.equal((await f.store.db.prepare('SELECT COUNT(*) AS n FROM quest_completions').get()).n, 1);
   assert.equal((await f.store.db.prepare('SELECT COUNT(*) AS n FROM xp_ledger').get()).n, 2);
   assert.ok((await f.lobby.act(f.alice.id, 'resign', { gameId: game.id })).error);
   (await f.lobby.tick());
-  assert.equal((await f.store.user(f.alice.id)).xp, 17);
+  assert.equal((await f.store.user(f.alice.id)).xp, 15);
   assert.equal((await f.store.user(f.alice.id)).rated_games, 1);
   assert.equal((await f.lobby.history(f.alice.id))[0].gameId, game.id);
   const revealed = f.lobby.snapshot(result, f.alice.id).recap.players.b.quests[0].questId;

@@ -6,6 +6,7 @@ const { io: ioClient } = require('socket.io-client');
 const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { Store } = require('../src/store');
 const { createServer } = require('../src/server');
 const { Lobby } = require('../src/lobby');
@@ -149,25 +150,126 @@ test('authorization, origin checks, session logout and active engine gate are en
   assert.equal((await f.lobby.game(game.gameId)).result, null, 'logout leaves server clock running');
 });
 
-test('directory is private by default and visibility is user-controlled', async (t) => {
+test('Codespaces development accepts only its exact forwarded origin for HTTP and sockets', async (t) => {
+  const values = {
+    CODESPACES: 'true', CODESPACE_NAME: 'questoc-origin-test',
+    GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'app.github.dev', NODE_ENV: 'development',
+    APP_ORIGIN: undefined,
+  };
+  for (const [key, value] of Object.entries(values)) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   const f = await fixture(t);
+  await f.account('ForwardedPlayer');
+  const port = f.httpServer.address().port;
+  const origin = `https://questoc-origin-test-${port}.app.github.dev`;
+  const login = (Origin) => fetch(`${f.base}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin },
+    body: JSON.stringify({ name: 'ForwardedPlayer', password: 'testing-password' }),
+  });
+  const response = await login(origin);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).user.name, 'ForwardedPlayer');
+  assert.equal((await fetch(`${f.base}/socket.io/?EIO=4&transport=polling`, { headers: { Origin: origin } })).status, 200);
+  const otherOrigin = `https://another-codespace-${port}.app.github.dev`;
+  assert.equal((await login(otherOrigin)).status, 403);
+  assert.equal((await fetch(`${f.base}/socket.io/?EIO=4&transport=polling`, { headers: { Origin: otherOrigin } })).status, 403);
+  process.env.APP_ORIGIN = 'https://configured.example';
+  assert.equal((await login(origin)).status, 403);
+  assert.equal((await login('https://configured.example')).status, 200);
+  delete process.env.APP_ORIGIN;
+  process.env.NODE_ENV = 'production';
+  assert.equal((await login(origin)).status, 403);
+});
+
+test('configured alias redirects to the canonical origin without weakening origin checks', async (t) => {
+  for (const [key, value] of Object.entries({
+    APP_ORIGIN: 'https://questoc.com', APP_REDIRECT_HOST: 'www.questoc.com',
+  })) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  const f = await fixture(t);
+  const request = (requestPath, host, method = 'GET') => new Promise((resolve, reject) => {
+    const req = http.request(`${f.base}${requestPath}`, { method, headers: { Host: host } }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  for (const [method, requestPath] of [['GET', '/?invite=abc'], ['POST', '/api/auth/login']]) {
+    const response = await request(requestPath, 'www.questoc.com', method);
+    assert.equal(response.status, 308);
+    assert.equal(response.headers.location, `https://questoc.com${requestPath}`);
+  }
+  const unusualPath = await request('//other.invalid/path', 'www.questoc.com');
+  assert.equal(unusualPath.headers.location, 'https://questoc.com//other.invalid/path');
+  for (const host of ['questoc.com', 'unrelated.invalid', 'www.questoc.com.other.invalid']) {
+    const response = await request('/healthz', host);
+    assert.equal(response.status, 200);
+  }
+  assert.equal((await fetch(`${f.base}/api/me`, {
+    headers: { Host: 'questoc.com', Origin: 'https://questoc.com' },
+  })).status, 401);
+  assert.equal((await fetch(`${f.base}/api/me`, {
+    headers: { Host: 'questoc.com', Origin: 'https://other.invalid' },
+  })).status, 403);
+  for (const origin of ['https://questoc.com', 'https://other.invalid']) {
+    const response = await fetch(`${f.base}/socket.io/?EIO=4&transport=polling`, {
+      headers: { Origin: origin },
+    });
+    assert.equal(response.status, origin === 'https://questoc.com' ? 200 : 403);
+  }
+  for (const origin of ['', 'http://questoc.com', 'https://www.questoc.com', 'https://questoc.com/path']) {
+    process.env.APP_ORIGIN = origin;
+    assert.throws(() => createServer({ store: {} }), /requires a distinct HTTPS APP_ORIGIN/);
+  }
+});
+
+test('directory automatically broadcasts connected players and removes offline accounts', async (t) => {
+  const f = await fixture(t, { tickMs: 60_000 });
   const alice = await f.account('Alice');
   const bob = await f.account('Bob');
+  await f.account('Offline');
   const a = await f.connect(alice);
+  const joined = once(a, 'players');
   const b = await f.connect(bob);
-  const update = once(b, 'players');
-  await fetch(`${f.base}/api/profile/visibility`, { method: 'POST',
-    headers: { Cookie: alice.cookie, 'Content-Type': 'application/json' }, body: '{"visible":true}' });
-  assert.deepEqual((await update).map((u) => u.name), ['Alice']);
-  assert.equal((await f.lobby.listPlayers()).length, 1);
+  assert.deepEqual((await joined).map((u) => u.name), ['Alice', 'Bob']);
+  const secondTabConnected = once(b, 'players');
+  const a2 = await f.connect(alice);
+  assert.equal((await secondTabConnected).length, 2);
+  const secondTabClosed = once(b, 'players');
+  a2.close();
+  assert.deepEqual((await secondTabClosed).map((u) => u.name), ['Alice', 'Bob']);
+  const retired = await fetch(`${f.base}/api/profile/visibility`, { method: 'POST',
+    headers: { Cookie: alice.cookie, 'Content-Type': 'application/json' }, body: '{"visible":false}' });
+  assert.equal(retired.status, 410);
+  assert.match((await retired.json()).error, /listed automatically/);
+  assert.equal((await f.lobby.listPlayers()).length, 2);
   assert.deepEqual(await emit(a, 'presence:heartbeat'), { ok: true });
+  const left = once(b, 'players');
+  const logout = await fetch(`${f.base}/api/auth/logout`, { method: 'POST',
+    headers: { Cookie: alice.cookie, 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(logout.status, 200);
+  assert.deepEqual((await left).map((u) => u.name), ['Bob']);
 });
 
 test('serves chessboard.js visuals, all pieces and Stockfish 19 after authentication', async (t) => {
   const f = await fixture(t);
   const alice = await f.account('Alice');
   const html = await fetch(f.base).then((r) => r.text());
-  assert.match(html, /Chess Quest/);
+  assert.match(html, /<title>questoc \| Little Chess, Big Adventures<\/title>/);
   assert.ok(html.indexOf('/vendor/jquery/jquery.min.js') < html.indexOf('/vendor/chessboard/chessboard-1.0.0.min.js'));
   assert.ok(html.indexOf('/vendor/chessboard/chessboard-1.0.0.min.js') < html.indexOf('/app.mjs'));
   for (const asset of ['/vendor/jquery/jquery.min.js', '/vendor/chessboard/chessboard-1.0.0.min.js',
@@ -263,19 +365,14 @@ test('health endpoint fails explicitly when the database query fails', async (t)
   assert.deepEqual(await response.json(), { error: 'Server error. Please try again.' });
 });
 
-test('idle scaling signal remains active for disconnected games and clears after completion', async (t) => {
-  const checks = [];
-  const activityLease = {
-    due: () => true,
-    async update(active) { checks.push(active); },
-  };
-  const f = await fixture(t, { activityLease, tickMs: 10 });
+test('maintenance finalizes disconnected games without an external activity signal', async (t) => {
+  let now = Date.now();
+  const f = await fixture(t, { tickMs: 10, lobbyOptions: { now: () => now } });
   const waitFor = async (predicate) => {
     const deadline = Date.now() + 5000;
-    while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.ok(predicate(), 'Activity signal did not converge.');
+    while (!await predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(await predicate(), 'Game maintenance did not converge.');
   };
-  await waitFor(() => checks.includes(false));
   const alice = await f.account('Alice');
   const bob = await f.account('Bob');
   const a = await f.connect(alice);
@@ -287,9 +384,10 @@ test('idle scaling signal remains active for disconnected games and clears after
   a.close();
   b.close();
   await waitFor(() => f.io.sockets.sockets.size === 0);
-  checks.length = 0;
-  await waitFor(() => checks.length > 0);
-  assert.ok(checks.every(Boolean), 'Disconnected active games must keep a replica.');
-  await f.lobby.act(alice.user.id, 'resign', { gameId: game.gameId });
-  await waitFor(() => checks.includes(false));
+  assert.equal((await f.lobby.game(game.gameId)).result, null);
+  now += 600_001;
+  await waitFor(async () => (await f.lobby.game(game.gameId)).result !== null);
+  assert.equal((await f.lobby.game(game.gameId)).result, '0-1');
+  assert.equal(await f.lobby.activeId(alice.user.id), undefined);
+  assert.equal(await f.lobby.activeId(bob.user.id), undefined);
 });

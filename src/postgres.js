@@ -45,7 +45,7 @@ class PostgresDatabase {
     try {
       await db.client.connect();
       const { rows } = await db.client.query('SELECT pg_try_advisory_lock(731927401) AS acquired');
-      if (!rows[0].acquired) throw new Error('Another Chess Quest process owns this database. Run exactly one instance.');
+      if (!rows[0].acquired) throw new Error('Another questoc process owns this database. Run exactly one instance.');
       return db;
     } catch (error) {
       await db.client.end();

@@ -1,10 +1,23 @@
-# Chess Quest (ChessPulse)
+# questoc
 
-**Win the board. Uncover the mission.**
+**Little Chess, Big Adventures**
 
 Authenticated, rated human-vs-human chess with secret objectives and opponent
 deduction. There is one game mode and one time control: **10+0 rapid**.
 Chess decides the result; quests earn separate lifetime XP and Quest Rank.
+
+The kid-friendly lobby puts total XP and Quest Rank up front, with one primary
+**Start a quest** action and friend invites nearby. Profile information
+expand only when needed. The online directory is always visible in the lobby,
+updates live, and lists every connected, signed-in player automatically, including
+yourself. Multiple tabs count as one player. The board appears during a
+game and stays visible at completion, on desktop and mobile. During play, secret quests and
+their base XP stay beside or directly below the board. The recap celebrates
+earned XP and signed chess rating changes beside the board (directly below on
+mobile), with a collapsible quest/reward breakdown. Return to the lobby to start
+another adventure; game history reopens the board and its recorded rewards.
+Accounts, database paths and existing deployment resource names are unchanged.
+The current XP rules and compatibility policy are documented below.
 
 ## Run and test
 
@@ -20,9 +33,24 @@ npm run test:e2e                  # real Chromium + actual Stockfish WASM evalua
 ```
 
 Sign up in two separate browser profiles/incognito contexts to play as two
-different people. Tabs sharing cookies belong to the same account. Tests use
+different people. Tabs sharing cookies belong to the same account.
+Registration requires a username and password. The username is also the public
+display name and is used to sign in; existing accounts keep their names.
+Tests use
 isolated databases, not the application database. Browser tests start and stop
 their own server on port 4317; set `E2E_PORT` if that port is occupied.
+
+In GitHub Codespaces, run `npm start` and open forwarded port **3000** from the
+Ports panel. Port **4317** belongs to the temporary browser-test server and stops
+when tests finish; do not use that preview to sign in. Development automatically
+accepts the exact HTTPS forwarded origin for the current Codespace and app port.
+Production still requires `APP_ORIGIN`. Sign-in stays disabled until the app's
+JavaScript loads; forms never send credentials in the URL.
+
+If sign-in reports an empty or unreadable server response, retry once, then
+restart `npm start` and open the URL printed in that terminal. Check the terminal
+for server errors if the problem persists. These messages include the HTTP
+status and indicate a response problem, not necessarily incorrect credentials.
 
 ## Architecture and migration
 
@@ -86,10 +114,12 @@ not immediately forfeit: the server clock keeps running.
   opposite delta. Equally rated players gain/lose 16 for a decisive result.
 - The first **five** eligible completed games are provisional. K remains 32
   during and after provisional status. Quests and XP never affect chess rating.
-- New accounts are hidden from the public online directory. Opt in on your
-  profile. Directory counts include visible live accounts only, not registered
-  accounts or hidden users. Known-name challenges and explicit queue entry work
-  while hidden.
+- Every connected, signed-in player appears in the online directory automatically.
+  Counts include yourself, deduplicate tabs/devices and exclude offline accounts.
+  The former directory-hiding preference no longer applies, including for existing
+  accounts; its legacy database column is retained unused, without a migration.
+  Old clients calling the retired visibility endpoint receive an explicit HTTP 410
+  asking them to refresh. Use a nickname rather than your real name.
 - Presence uses authenticated connections, transport heartbeat and a 20-second
   application heartbeat with 60-second expiry. Closing one of several tabs does
   not mark the account offline.
@@ -166,9 +196,12 @@ Launch rules are centralized in [src/rules.js](src/rules.js). Games snapshot
 their reward/guess/Elo parameters so later tuning does not reinterpret active
 matches. Quest assignments persist their base XP.
 
-- Easy/Medium/Hard completions: **20/40/60** base XP; successful guess: **15**.
+- Easy/Medium/Hard completions: **20/40/60** base XP; successful guess: **10**.
 - Eligible base events are summed, multiplied by **win x2 / draw x1 / loss x0.5**,
-  then rounded down **once**. Rewards are not applied before finalization.
+  with no rounding needed: all new base awards are multiples of 10. A guess-only
+  loss/draw/win earns exactly **5/10/20 XP**. Rewards are not applied before
+  finalization. Older active games keep their saved reward amounts and legacy
+  rounding; historical ledgers are not rewritten.
 - Lifetime XP remains nonnegative. Quest Rank thresholds are **0 / 200 / 500**
   (Level 1/2/3), independently of chess rating.
 - No XP for fewer than **10 plies**, explicit server abandonment, or after
@@ -180,8 +213,9 @@ matches. Quest assignments persist their base XP.
   update neither rating nor the provisional game count; routine reconnects
   and restarts are not abandonment.
 - Recaps include result/reason, move list, both assignments and evidence,
-  timestamped guesses, rating before/after, XP events, multiplier, eligibility
+  guess titles/outcomes, rating before/after, XP events, multiplier, eligibility
   flags, final award and lifetime total. They remain accessible in game history.
+  Exact guess timestamps remain in server records, not in the displayed recap.
 
 This is basic repeat-opponent protection, not comprehensive collusion/Sybil or
 external-engine detection. Server validation rejects forged completions and
@@ -208,8 +242,9 @@ this as stateless replicas or put the database on an unreliable network share.
 ### Deploy to Azure
 
 See the [cost-conscious Azure deployment guide](infra/README.md) for a
-0–1 replica Container Apps Consumption and managed PostgreSQL B1ms deployment,
-private database networking, HTTPS, safe idle scaling and live price checks.
+single-instance Linux App Service B1 and managed PostgreSQL B1ms deployment,
+public database connectivity restricted by firewall, verified TLS and live price checks.
+There is no container registry, VNet, private DNS or keep-awake queue.
 The [Bicep template](infra/main.bicep) creates the infrastructure; the
 [publish script](infra/publish.sh) deploys the app without uploading local data.
 The [GitHub Actions workflow](.github/workflows/azure.yml) tests changes and
@@ -221,7 +256,7 @@ PostgreSQL uses the same schema and atomic game/reward transactions as SQLite.
 Database access is asynchronous; an application action queue preserves move,
 matchmaking and timeout serialization. A PostgreSQL session advisory lock
 prevents multiple app processes from sharing the database while presence and
-queues remain in memory. Deploy a single worker and revision, not a cluster.
+queues remain in memory. Deploy a single worker and App Service instance, not a cluster.
 PostgreSQL integration tests use `npm run test:postgres` against a disposable
 database, as described in the deployment guide.
 
@@ -241,7 +276,9 @@ For staging:
 6. Monitor explicit request/socket/maintenance errors and reward eligibility
    logs. Arrange process supervision, TLS renewal and disk-space alerts.
 
-The Central US deployment uses the `chessquest-mvp-centralus` resource group.
+The simplified Central US deployment uses a new `chessquest-appservice-centralus`
+resource group and starts with an empty database. Existing Container Apps resources
+are not deleted automatically; follow the migration checklist before removing them.
 Regional availability and cloud deployment status must be checked in Azure;
 local tests alone do not establish production readiness.
 

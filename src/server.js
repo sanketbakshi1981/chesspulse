@@ -7,18 +7,29 @@ const { Server } = require('socket.io');
 const { Store, SESSION_MS } = require('./store');
 const { Lobby } = require('./lobby');
 const { CATALOG } = require('./quests');
-const { activityLeaseFromEnvironment } = require('./activity');
 
 const ROOT = path.join(__dirname, '..');
 function sessionToken(cookie = '') {
   return cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('cq_session='))?.slice(11) || '';
 }
 
-function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000, activityLease = null } = {}) {
+function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000 } = {}) {
+  const redirectHost = process.env.APP_REDIRECT_HOST;
+  const canonicalUrl = process.env.APP_ORIGIN ? new URL(process.env.APP_ORIGIN) : null;
+  if (redirectHost && (!canonicalUrl || canonicalUrl.protocol !== 'https:'
+    || canonicalUrl.origin !== process.env.APP_ORIGIN || canonicalUrl.hostname === redirectHost)) {
+    throw new Error('APP_REDIRECT_HOST requires a distinct HTTPS APP_ORIGIN without a path.');
+  }
   const app = express();
   if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
   const httpServer = http.createServer(app);
-  const allowedOrigin = (origin, host) => !origin || origin === (process.env.APP_ORIGIN || `http://${host}`);
+  const allowedOrigin = (origin, host) => {
+    if (!origin || origin === (process.env.APP_ORIGIN || `http://${host}`)) return true;
+    return !process.env.APP_ORIGIN && process.env.NODE_ENV !== 'production'
+      && process.env.CODESPACES === 'true' && Boolean(process.env.CODESPACE_NAME)
+      && Boolean(process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN)
+      && origin === `https://${process.env.CODESPACE_NAME}-${httpServer.address()?.port}.${process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}`;
+  };
   const io = new Server(httpServer, {
     maxHttpBufferSize: 8192,
     allowRequest: (req, callback) => callback(null, allowedOrigin(req.headers.origin, req.headers.host)),
@@ -80,6 +91,12 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000, a
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     next();
   });
+  app.use((req, res, next) => {
+    if (redirectHost && req.hostname === redirectHost) {
+      return res.redirect(308, `${canonicalUrl.origin}${req.originalUrl}`);
+    }
+    next();
+  });
   app.use('/api', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     if (!allowedOrigin(req.get('origin'), req.get('host'))) return res.status(403).json({ error: 'Origin not allowed.' });
@@ -117,12 +134,8 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000, a
     if (!game || !lobby.colorOf(game, req.user.id)) return res.status(404).json({ error: 'Game not found.' });
     res.json(lobby.snapshot(game, req.user.id));
   }));
-  app.post('/api/profile/visibility', auth, route(async (req, res) => {
-    if (!rate(`profile:${req.user.id}`, 20)) return res.status(429).json({ error: 'Too many profile updates.' });
-    if (typeof req.body?.visible !== 'boolean') return res.status(400).json({ error: 'Visibility must be true or false.' });
-    await store.visibility(req.user.id, req.body.visible);
-    await broadcastPlayers();
-    res.json({ user: store.profile(await store.user(req.user.id)) });
+  app.post('/api/profile/visibility', auth, (req, res) => res.status(410).json({
+    error: 'Online players are now listed automatically. Refresh the page to update your profile controls.',
   }));
 
   app.use('/vendor/stockfish', auth, route(async (req, res, next) => {
@@ -226,11 +239,6 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000, a
       for (const game of await lobby.tick()) await publish(game);
       for (const game of await lobby.pair()) await publish(game);
       for (const [key, value] of limits) if (value.expires <= Date.now()) limits.delete(key);
-      if (activityLease?.due()) {
-        const active = io.sockets.sockets.size > 0
-          || Boolean(await store.db.prepare('SELECT 1 FROM active_players LIMIT 1').get());
-        await activityLease.update(active);
-      }
       await broadcastPlayers();
     }).catch((error) => console.error('Game maintenance failed:', error))
       .finally(() => { maintaining = false; });
@@ -260,10 +268,10 @@ async function start() {
   const port = Number(process.env.PORT) || 3000;
   const store = await Store.open();
   let server;
-  try { server = createServer({ store, activityLease: activityLeaseFromEnvironment() }); }
+  try { server = createServer({ store }); }
   catch (error) { await store.close(); throw error; }
   const { httpServer, io } = server;
-  httpServer.listen(port, () => console.log(`Chess Quest running at http://localhost:${port}`));
+  httpServer.listen(port, () => console.log(`questoc running at http://localhost:${port}`));
   const shutdown = () => io.close(async () => {
     try { await store.close(); }
     catch (error) { console.error('Database shutdown failed:', error); process.exitCode = 1; }
