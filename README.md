@@ -2,6 +2,8 @@
 
 **Little Chess, Big Adventures**
 
+The logo, brand palette and usage guidelines are documented in [COLOR_SCHEME.md](COLOR_SCHEME.md).
+
 Authenticated, rated human-vs-human chess with secret objectives and opponent
 deduction. There is one game mode and one time control: **10+0 rapid**.
 Chess decides the result; quests earn separate lifetime XP and Quest Rank.
