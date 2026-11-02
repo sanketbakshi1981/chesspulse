@@ -1,6 +1,8 @@
-# questoc
+# Questoc
 
-**Little Chess, Big Adventures**
+*A Whole New Way to Play Chess.*
+
+Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent’s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.
 
 The logo, brand palette and usage guidelines are documented in [COLOR_SCHEME.md](COLOR_SCHEME.md).
 

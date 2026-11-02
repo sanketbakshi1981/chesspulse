@@ -302,7 +302,7 @@ test('serves chessboard.js visuals, all pieces and Stockfish 19 after authentica
   const f = await fixture(t);
   const alice = await f.account('Alice');
   const html = await fetch(f.base).then((r) => r.text());
-  assert.match(html, /<title>questoc \| Little Chess, Big Adventures<\/title>/);
+  assert.match(html, /<title>Questoc \| A Whole New Way to Play Chess\.<\/title>/);
   assert.ok(html.indexOf('/vendor/jquery/jquery.min.js') < html.indexOf('/vendor/chessboard/chessboard-1.0.0.min.js'));
   assert.ok(html.indexOf('/vendor/chessboard/chessboard-1.0.0.min.js') < html.indexOf('/app.mjs'));
   for (const asset of ['/vendor/jquery/jquery.min.js', '/vendor/chessboard/chessboard-1.0.0.min.js',

@@ -55,7 +55,7 @@ test('sign-in remains unavailable with JavaScript disabled', async ({ browser, b
     await page.goto('/');
     await expect(page.locator('#auth-submit')).toBeDisabled();
     await expect(page.locator('noscript p')).toBeVisible();
-    await expect(page.locator('noscript p')).toHaveText('Please enable JavaScript to sign in and play questoc.');
+    await expect(page.locator('noscript p')).toHaveText('Please enable JavaScript to sign in and play Questoc.');
     await expect(page.locator('#checkin-form')).toHaveAttribute('method', 'post');
   } finally { await context.close(); }
 });
@@ -365,21 +365,26 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
     } finally { await first.close(); await second.close(); }
   });
 
-  test(`questoc branding and quest-first lobby at ${viewport.width} x ${viewport.height}`, async ({ browser, baseURL }) => {
+  test(`Questoc branding and quest-first lobby at ${viewport.width} x ${viewport.height}`, async ({ browser, baseURL }) => {
     const context = await browser.newContext({ baseURL, viewport });
     const page = await context.newPage();
     try {
       await page.goto('/');
-      await expect(page).toHaveTitle('questoc | Little Chess, Big Adventures');
-      await expect(page.locator('.brand p')).toHaveText('Little Chess, Big Adventures');
-      await expect(page.getByRole('heading', { name: 'questoc', exact: true })).toBeVisible();
+      const introduction = 'Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent’s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.';
+      await expect(page).toHaveTitle('Questoc | A Whole New Way to Play Chess.');
+      await expect(page.locator('body')).not.toContainText('Little Chess, Big Adventures');
+      await expect(page.locator('#checkin .game-introduction')).toHaveText(introduction);
+      await expect(page.locator('#checkin .game-introduction')).toBeVisible();
+      await expect(page.locator('.brand-subtitle')).toHaveText('A Whole New Way to Play Chess.');
+      await expect(page.locator('.brand-subtitle')).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Questoc', exact: true })).toBeVisible();
       const logo = page.getByRole('img', { name: 'Questoc logo', exact: true });
       await expect(logo).toBeVisible();
       await expect(logo).toHaveAttribute('src', '/img/chesspieces/questoc-logo.png');
       expect(await logo.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
       await expect(page.locator('header')).toHaveCSS('background-color', 'rgb(10, 31, 68)');
       await expect(page.locator('.brand h1')).toHaveCSS('color', 'rgb(204, 153, 51)');
-      await expect(page.locator('.brand p')).toHaveCSS('color', 'rgb(255, 215, 0)');
+      await expect(page.locator('.brand-subtitle')).toHaveCSS('color', 'rgb(255, 215, 0)');
       await expect(page.locator('#auth-submit')).toHaveCSS('background-color', 'rgb(51, 102, 204)');
       await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#0A1F44');
       await expect(page.getByLabel('How to play')).toContainText('Earn XP');
@@ -388,6 +393,9 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
       expect(favicon.ok()).toBe(true);
       expect(favicon.headers()['content-type']).toContain('image/png');
       await register(page, `Questoc${viewport.width}`, '');
+      await expect(page.locator('#lobby .game-introduction')).toHaveText(introduction);
+      await expect(page.locator('#lobby .game-introduction')).toBeVisible();
+      await expect(page.locator('#lobby h2').first()).toHaveText('A Whole New Way to Play Chess.');
       await expect(page.locator('#profile-stats')).toContainText('0 XP');
       await expect(page.locator('#profile-stats')).toContainText('Quest Rank');
       await expect(page.locator('#profile-stats')).toContainText('Level 1');

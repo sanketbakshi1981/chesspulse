@@ -1,9 +1,9 @@
-# questoc — MVP Engineering Requirements
+# Questoc — MVP Engineering Requirements
 
 **Status:** Implementation-ready draft for GitHub Copilot  
 **Source:** Chess Quest Vision & MVP PRD (10-minute edition), October 27, 2026  
 **Priority:** P0 unless otherwise stated  
-**Product promise:** *Little Chess, Big Adventures*
+**Product promise:** *A Whole New Way to Play Chess.*
 
 **Reward and recap update (November 2, 2026):** For new games, correct guesses earn 10 base XP and quests retain 20 / 40 / 60 base XP. Every base reward is a multiple of 10, so win / draw / loss multipliers require no rounding. Existing games retain their saved reward rules. On completion, keep the board visible with earned XP and signed chess rating changes beside it, or directly below on mobile. Show guess titles and outcomes without timestamps. These rules supersede earlier guess-XP, rounding and completed-board visibility defaults.
 

@@ -284,6 +284,8 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   .brand { gap: 0.5rem; }
   .brand img { width: 34px; height: 34px; }
   header p { display: none; }
+  .brand .brand-subtitle { display: block; font-size: 0.7rem; margin-top: 0; }
+  .active-game .brand .brand-subtitle { display: none; }
   .account { gap: 0.5rem; font-size: 0.8rem; min-width: 0; }
   #connection { overflow-wrap: anywhere; }
   button, select, input { min-height: 44px; }

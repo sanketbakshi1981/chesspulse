@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>questoc | Little Chess, Big Adventures</title>
-  <meta name="description" content="Play chess, take on secret quests, and earn XP. Your next adventure starts on questoc.">
+  <title>Questoc | A Whole New Way to Play Chess.</title>
+  <meta name="description" content="Play chess, take on secret quests, and earn XP. Your next adventure starts on Questoc.">
   <meta name="theme-color" content="#0A1F44">
   <link rel="icon" href="/img/chesspieces/questoc-logo.png" type="image/png">
   <link rel="stylesheet" href="/vendor/chessboard/chessboard-1.0.0.min.css">
@@ -12,14 +12,14 @@
 </head>
 <body>
   <header>
-    <div class="brand"><img src="/img/chesspieces/questoc-logo.png" width="44" height="44" alt="Questoc logo"><div><h1>questoc</h1><p class="muted">Little Chess, Big Adventures</p></div></div>
+    <div class="brand"><img src="/img/chesspieces/questoc-logo.png" width="44" height="44" alt="Questoc logo"><div><h1>Questoc</h1><p class="brand-subtitle">A Whole New Way to Play Chess.</p></div></div>
     <div class="account"><span id="connection" role="status">Not connected</span><button id="logout-btn" class="secondary" hidden>Sign out</button></div>
   </header>
   <p id="app-error" class="error notice" role="alert"></p>
   <section id="checkin" class="card">
     <p class="eyebrow">Your next adventure starts here</p>
     <h2 id="auth-title">Welcome back</h2>
-    <p class="muted">Play chess. Complete secret quests. Collect XP along the way!</p>
+    <p class="muted game-introduction">Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent&rsquo;s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.</p>
     <ol class="quest-steps" aria-label="How to play"><li>Play chess</li><li>Try a quest</li><li>Earn XP</li></ol>
     <form id="checkin-form" method="post" action="/api/auth/login">
       <label>Username<input id="name-input" name="name" maxlength="20" autocomplete="username" required autofocus></label>
@@ -35,7 +35,7 @@
     </form>
     <button id="auth-switch" class="secondary" disabled>New here? Create an account</button>
     <p id="checkin-error" class="error" role="alert">Loading sign-in... If this message stays here, refresh the page and check that the app server is running.</p>
-    <noscript><p class="error">Please enable JavaScript to sign in and play questoc.</p></noscript>
+    <noscript><p class="error">Please enable JavaScript to sign in and play Questoc.</p></noscript>
   </section>
   <main id="app" hidden>
     <aside class="stack" id="lobby-panel">
@@ -49,7 +49,7 @@
       </section>
       <section class="card" id="lobby">
         <p class="eyebrow">Ready, set, quest!</p>
-        <h2>Little Chess, Big Adventures</h2>
+        <h2>A Whole New Way to Play Chess.</h2>
         <p class="muted">Get a secret quest and earn XP as you play. Every game is a new challenge!</p>
         <p class="game-facts">10 minutes each &middot; No extra time &middot; A real opponent</p>
         <button id="find-match-btn">Start a quest &middot; 10 min</button>
@@ -57,6 +57,7 @@
         <form id="challenge-form"><label>Invite a friend by display name<input id="challenge-name" maxlength="20" required></label><button type="submit" class="secondary">Send challenge</button></form>
         <button id="cancel-challenge-btn" class="secondary" hidden>Cancel challenge</button>
         <div id="challenges"></div>
+        <p class="muted game-introduction">Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent&rsquo;s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.</p>
         <p id="lobby-status" class="muted" role="status"></p>
         <section id="online-players" aria-label="Online players"><h2>Players online <span id="online-count" class="badge">0</span></h2>
         <p id="players-empty" class="muted" role="status">No players online yet. You can still invite a friend or start a quest.</p>
