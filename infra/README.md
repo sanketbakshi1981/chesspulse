@@ -197,6 +197,11 @@ when configuring the existing deployment, rather than the Central US examples
 for new infrastructure. After replacing the old Container Apps configuration,
 remove the unused `AZURE_CONTAINER_APP_NAME` and `AZURE_REGISTRY_NAME` variables.
 
+For this repository, GitHub includes immutable owner/repository IDs in its OIDC
+subject. When deploying the identity template, also pass
+`--parameters githubSubject='repo:sanketbakshi1981@213671551/chesspulse@1434837256:environment:production'`.
+Azure must match the subject exactly; the name-only default will fail login.
+
 The identity has **Website Contributor scoped to this web app only** and **Reader
 on its plan** so the publisher can check the single-instance constraint. It has
 no subscription-wide Contributor or access to provision PostgreSQL. The workflow

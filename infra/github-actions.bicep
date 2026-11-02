@@ -6,6 +6,9 @@ param repository string = 'sanketbakshi1981/chesspulse'
 @description('GitHub environment; restrict its deployment branches to main in GitHub settings.')
 param githubEnvironment string = 'production'
 
+@description('Exact GitHub OIDC subject. Override when GitHub includes immutable owner/repository IDs.')
+param githubSubject string = 'repo:${repository}:environment:${githubEnvironment}'
+
 param appName string
 param planName string = 'chessquest-plan'
 param location string = resourceGroup().location
@@ -29,7 +32,7 @@ resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedI
   name: 'github-production'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${repository}:environment:${githubEnvironment}'
+    subject: githubSubject
     audiences: ['api://AzureADTokenExchange']
   }
 }
