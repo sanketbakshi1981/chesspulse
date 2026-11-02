@@ -8,11 +8,13 @@
   <meta name="theme-color" content="#0A1F44">
   <link rel="icon" href="/img/chesspieces/questoc-logo.png" type="image/png">
   <link rel="stylesheet" href="/vendor/chessboard/chessboard-1.0.0.min.css">
+  <link rel="stylesheet" href="/vendor/montserrat/index.css">
+  <link rel="stylesheet" href="/vendor/montserrat/wght-italic.css">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header>
-    <div class="brand"><img src="/img/chesspieces/questoc-logo.png" width="44" height="44" alt="Questoc logo"><div><h1>Questoc</h1><p class="brand-subtitle">A Whole New Way to Play Chess.</p></div></div>
+    <div class="brand"><img src="/img/chesspieces/questoc-logo.png" width="44" height="44" alt="Questoc logo"><div><h1>QUESTOC</h1><p class="brand-subtitle">A Whole New Way to Play Chess.</p></div></div>
     <div class="account"><span id="connection" role="status">Not connected</span><button id="logout-btn" class="secondary" hidden>Sign out</button></div>
   </header>
   <p id="app-error" class="error notice" role="alert"></p>
@@ -50,7 +52,7 @@
       <section class="card" id="lobby">
         <p class="eyebrow">Ready, set, quest!</p>
         <h2>A Whole New Way to Play Chess.</h2>
-        <p class="muted">Get a secret quest and earn XP as you play. Every game is a new challenge!</p>
+        <p class="muted game-introduction">Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent&rsquo;s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.</p>
         <p class="game-facts">10 minutes each &middot; No extra time &middot; A real opponent</p>
         <button id="find-match-btn">Start a quest &middot; 10 min</button>
         <button id="cancel-queue-btn" class="secondary" hidden>Stop searching</button>
@@ -63,7 +65,6 @@
         <ul id="players"></ul>
         <p id="registered-total" class="muted" role="status">Total registered players: <span id="registered-count"></span></p>
         </section>
-        <p class="muted game-introduction">Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent&rsquo;s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.</p>
       </section>
       <section class="card" id="history-panel"><h2>Your recent adventures</h2><p id="history-empty" class="muted">Your first adventure is waiting. Play a game to start your story!</p><ul id="history"></ul></section>
       <section id="recap" class="card" hidden aria-label="Game recap"></section>

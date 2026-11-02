@@ -315,9 +315,11 @@ test('mobile onboarding and lobby have no horizontal overflow and sign-out is us
     await expect(page.locator('#profile-stats')).toContainText('1000');
     await expect(page.locator('#board')).toBeHidden();
     await expect(page.locator('#quest-panel')).toBeHidden();
-    for (const selector of ['#find-match-btn', '#challenge-name', '#online-players h2']) {
+    for (const selector of ['#find-match-btn', '#challenge-name']) {
       await expect(page.locator(selector)).toBeInViewport({ ratio: 1 });
     }
+    await page.locator('#online-players h2').scrollIntoViewIfNeeded();
+    await expect(page.locator('#online-players h2')).toBeInViewport({ ratio: 1 });
     await page.locator('#history-panel').evaluate((panel) => panel.scrollIntoView({ block: 'center' }));
     await expect(page.locator('#history-panel')).toBeInViewport({ ratio: 1 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -338,6 +340,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
       await expect(a.locator('#online-count')).toHaveText('1');
       await expect(a.locator('#players')).toContainText(`DirectoryA${viewport.width}`);
       await register(b, `DirectoryB${viewport.width}`, '');
+      await a.locator('#online-players h2').scrollIntoViewIfNeeded();
       await expect(a.locator('#online-players h2')).toBeInViewport({ ratio: 1 });
       await expect(a.locator('#players')).toContainText(`DirectoryB${viewport.width}`);
       await expect(a.locator('#players')).toContainText('available');
@@ -371,13 +374,19 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
     try {
       await page.goto('/');
       const introduction = 'Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent’s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.';
+      await page.evaluate(() => document.fonts.ready);
+      expect(await page.evaluate(() => [...document.fonts].some((font) => font.family === 'Montserrat Variable' && font.status === 'loaded'))).toBe(true);
+      for (const selector of ['body', '.brand h1', '#auth-submit', '#name-input']) {
+        await expect(page.locator(selector)).toHaveCSS('font-family', '"Montserrat Variable", system-ui, sans-serif');
+      }
       await expect(page).toHaveTitle('Questoc | A Whole New Way to Play Chess.');
       await expect(page.locator('body')).not.toContainText('Little Chess, Big Adventures');
       await expect(page.locator('#checkin .game-introduction')).toHaveText(introduction);
       await expect(page.locator('#checkin .game-introduction')).toBeVisible();
       await expect(page.locator('.brand-subtitle')).toHaveText('A Whole New Way to Play Chess.');
       await expect(page.locator('.brand-subtitle')).toBeVisible();
-      await expect(page.getByRole('heading', { name: 'Questoc', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'QUESTOC', exact: true })).toBeVisible();
+      await expect(page.locator('.brand h1')).toHaveCSS('font-weight', '900');
       const logo = page.getByRole('img', { name: 'Questoc logo', exact: true });
       await expect(logo).toBeVisible();
       await expect(logo).toHaveAttribute('src', '/img/chesspieces/questoc-logo.png');
@@ -395,6 +404,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
       await register(page, `Questoc${viewport.width}`, '');
       await expect(page.locator('#lobby .game-introduction')).toHaveText(introduction);
       await expect(page.locator('#lobby .game-introduction')).toBeVisible();
+      await expect(page.locator('#lobby h2 + .game-introduction')).toHaveText(introduction);
+      await expect(page.locator('#lobby')).not.toContainText('Get a secret quest and earn XP as you play. Every game is a new challenge!');
       await expect(page.locator('#lobby h2').first()).toHaveText('A Whole New Way to Play Chess.');
       await expect(page.locator('#profile-stats')).toContainText('0 XP');
       await expect(page.locator('#profile-stats')).toContainText('Quest Rank');

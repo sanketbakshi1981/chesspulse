@@ -9,7 +9,7 @@ body {
   --muted: #59677e;
   --line: #dce4f1;
   margin: 0;
-  font-family: ui-rounded, "Trebuchet MS", system-ui, sans-serif;
+  font-family: "Montserrat Variable", system-ui, sans-serif;
   background: #f7f9fd;
   color: var(--ink);
   line-height: 1.5;
@@ -65,7 +65,7 @@ input[type="checkbox"] { min-height: 20px; width: 20px; flex-shrink: 0; accent-c
 #own-quests strong, .quest-meta { display: block; }
 .quest-meta { font-size: 0.8rem; margin-top: 0.2rem; }
 .player-label { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-.clock { font: 700 1.5rem ui-monospace, monospace; background: #e6edf9; padding: 0.35rem 0.75rem; border-radius: 10px; }
+.clock { font-weight: 700; font-size: 1.5rem; font-variant-numeric: tabular-nums; background: #e6edf9; padding: 0.35rem 0.75rem; border-radius: 10px; }
 .clock.running { background: var(--accent-bars); color: #fff; }
 #recap { margin-top: 1rem; }
 .recap-player { border-top: 1px solid var(--line); }
@@ -249,7 +249,7 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   max-height: 260px;
   overflow-y: auto;
   padding-left: 2rem;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
   font-size: 0.9rem;
 }
 #moves li span { display: inline-block; min-width: 4.5em; }
@@ -335,7 +335,7 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   .active-game #quest-panel { grid-row: 2; padding: 0.65rem; }
   .active-game #game-tools { grid-row: 3; }
   .active-game #board-heading, .reviewing #board-heading { display: none; }
-  .active-game #board-wrap { max-width: min(100%, max(220px, calc(100dvh - 430px))); }
+  .active-game #board-wrap { max-width: min(100%, max(220px, calc(100dvh - 500px))); }
   .active-game .player-bar, .reviewing .player-bar { padding: 0.25rem 0; }
   .active-game .player-label > span, .reviewing .player-label > span { font-size: 0.85rem; overflow-wrap: anywhere; }
   .active-game .clock, .reviewing .clock { font-size: 1.2rem; padding: 0.25rem 0.5rem; flex-shrink: 0; }

@@ -5,14 +5,19 @@
 Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent’s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.
 
 The logo, brand palette and usage guidelines are documented in [COLOR_SCHEME.md](COLOR_SCHEME.md).
+The site uses self-hosted Montserrat variable fonts, including bold and italic
+weights, supplied by the OFL-licensed `@fontsource-variable/montserrat` package.
 
 Authenticated, rated human-vs-human chess with secret objectives and opponent
 deduction. There is one game mode and one time control: **10+0 rapid**.
 Chess decides the result; quests earn separate lifetime XP and Quest Rank.
 
 The kid-friendly lobby puts total XP and Quest Rank up front, with one primary
-**Start a quest** action and friend invites nearby. Profile information
-expand only when needed. The online directory is always visible in the lobby,
+**Start a quest** action and friend invites nearby. The header uses the bold
+**QUESTOC** wordmark. The full game
+introduction appears below the lobby subtitle and before matchmaking controls;
+the online list remains accessible by scrolling on shorter screens. Profile information
+expands only when needed. The online directory is always visible in the lobby,
 updates live, and lists every connected, signed-in player automatically, including
 yourself. Multiple tabs count as one player. Below the online player list, the lobby
 shows the total number of registered accounts in smaller italic text for reference, including offline players,

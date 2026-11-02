@@ -153,6 +153,7 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000 } 
   app.use('/vendor/jquery', express.static(path.join(ROOT, 'node_modules/jquery/dist'), { index: false }));
   app.use('/vendor/chessboard', express.static(path.join(ROOT, 'node_modules/@chrisoakman/chessboardjs/dist'), { index: false }));
   app.use('/vendor/chess', express.static(path.join(ROOT, 'node_modules/chess.js/dist/esm'), { index: false }));
+  app.use('/vendor/montserrat', express.static(path.join(ROOT, 'node_modules/@fontsource-variable/montserrat'), { index: false }));
   app.use(express.static(path.join(ROOT, 'public')));
   app.get('/healthz', route(async (req, res) => {
     await store.db.prepare('SELECT 1').get();
