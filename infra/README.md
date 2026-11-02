@@ -191,6 +191,12 @@ branch to deploy and add these environment **variables**, not secrets:
 | `AZURE_RESOURCE_GROUP` | `chessquest-appservice-centralus` |
 | `AZURE_WEBAPP_NAME` | New web app name |
 
+The current production App Service is `chessquest-web-72ydyurqniopa` in
+`chessquest-appservice-westus2`, with plan `chessquest-plan`. Use these values
+when configuring the existing deployment, rather than the Central US examples
+for new infrastructure. After replacing the old Container Apps configuration,
+remove the unused `AZURE_CONTAINER_APP_NAME` and `AZURE_REGISTRY_NAME` variables.
+
 The identity has **Website Contributor scoped to this web app only** and **Reader
 on its plan** so the publisher can check the single-instance constraint. It has
 no subscription-wide Contributor or access to provision PostgreSQL. The workflow
