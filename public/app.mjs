@@ -24,6 +24,7 @@ syncGameTools();
 const state = {
   me: null,
   players: [],
+  registeredPlayers: null,
   chess: new Chess(),
   mode: 'idle',
   game: null, // last game state received from the server
@@ -135,6 +136,7 @@ function applySession(data) {
   state.catalog = data.catalog;
   state.history = data.history;
   state.queued = data.queued;
+  state.registeredPlayers = data.registeredPlayers;
   $('checkin').hidden = true;
   $('app').hidden = false;
   $('logout-btn').hidden = false;
@@ -217,6 +219,7 @@ socket.on('lobby:state', (data) => {
   state.incoming = new Map(data.incoming.map((p) => [p.id, p.name]));
   state.outgoing = data.outgoing;
   state.queued = data.queued;
+  state.registeredPlayers = data.registeredPlayers;
   renderLobby();
 });
 
@@ -292,6 +295,7 @@ function renderLobby() {
   $('cancel-challenge-btn').hidden = !state.outgoing;
   $('challenge-form').querySelector('button').disabled = inGame || !socket.connected;
   $('online-count').textContent = state.players.length;
+  $('registered-count').textContent = state.registeredPlayers === null ? '' : state.registeredPlayers.toLocaleString();
   $('players-empty').hidden = state.players.length > 0;
   $('players-empty').textContent = socket.connected
     ? 'No players online yet. You can still invite a friend or start a quest.'

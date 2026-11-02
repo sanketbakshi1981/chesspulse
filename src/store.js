@@ -93,6 +93,9 @@ class Store {
 
   async user(id) { return this.db.prepare('SELECT * FROM users WHERE id=?').get(id); }
   async byName(name) { return this.db.prepare('SELECT * FROM users WHERE name_key=?').get(name.toLowerCase()); }
+  async registeredPlayerCount() {
+    return Number((await this.db.prepare('SELECT COUNT(*) AS count FROM users').get()).count);
+  }
 
   profile(user) {
     return {

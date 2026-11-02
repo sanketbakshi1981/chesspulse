@@ -126,6 +126,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 #online-players { border-top: 1px solid var(--line); margin-top: 1rem; }
 #online-players h2 { font-size: 1rem; letter-spacing: normal; margin: 0.75rem 0 0.5rem; }
 #players-empty { font-size: 0.8rem; margin: 0.5rem 0; }
+#registered-total { font-size: 0.75rem; font-style: italic; }
 #players:empty { display: none; }
 #lobby-status:empty { display: none; }
 

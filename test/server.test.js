@@ -237,6 +237,39 @@ test('configured alias redirects to the canonical origin without weakening origi
   }
 });
 
+test('registered player totals include offline accounts and do not count sessions or reconnects', async (t) => {
+  const f = await fixture(t, { tickMs: 60_000 });
+  assert.equal(await f.store.registeredPlayerCount(), 0);
+  const alice = await f.account('CountAlice');
+  assert.equal(alice.registeredPlayers, 1);
+  const a = await f.connect(alice);
+  const bob = await f.account('CountBob');
+  assert.equal(bob.registeredPlayers, 2);
+  await f.account('CountOffline');
+  const update = once(a, 'lobby:state');
+  const b = await f.connect(bob);
+  assert.equal((await update).registeredPlayers, 3);
+  const disconnected = once(a, 'lobby:state');
+  b.close();
+  assert.equal((await disconnected).registeredPlayers, 3);
+  const reconnected = once(a, 'lobby:state');
+  await f.connect(bob);
+  assert.equal((await reconnected).registeredPlayers, 3);
+  const me = await fetch(`${f.base}/api/me`, { headers: { Cookie: alice.cookie } }).then((res) => res.json());
+  assert.equal(me.registeredPlayers, 3);
+  const login = await fetch(`${f.base}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'CountAlice', password: 'testing-password' }),
+  });
+  assert.equal((await login.json()).registeredPlayers, 3);
+  const duplicate = await fetch(`${f.base}/api/auth/register`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'CountAlice', password: 'testing-password' }),
+  });
+  assert.equal(duplicate.status, 400);
+  assert.equal(await f.store.registeredPlayerCount(), 3);
+});
+
 test('directory automatically broadcasts connected players and removes offline accounts', async (t) => {
   const f = await fixture(t, { tickMs: 60_000 });
   const alice = await f.account('Alice');

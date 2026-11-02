@@ -60,9 +60,11 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000 } 
       user: store.profile(await store.user(id)), catalog: publicCatalog,
       game: activeId ? lobby.snapshot(await lobby.game(activeId), id) : null,
       history: await lobby.history(id), queued: lobby.queue.has(id),
+      registeredPlayers: await store.registeredPlayerCount(),
     };
   };
   const broadcastPlayers = async () => {
+    const registeredPlayers = await store.registeredPlayerCount();
     io.emit('players', await lobby.listPlayers());
     const users = new Set([...io.sockets.sockets.values()].map((socket) => socket.data.userId));
     for (const id of users) {
@@ -73,6 +75,7 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000 } 
       const target = lobby.challenges.get(id);
       io.to(`user:${id}`).emit('lobby:state', {
         incoming, outgoing: target ? (await store.user(target)).name : null, queued: lobby.queue.has(id),
+        registeredPlayers,
       });
     }
   };

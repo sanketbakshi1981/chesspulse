@@ -10,7 +10,10 @@ The kid-friendly lobby puts total XP and Quest Rank up front, with one primary
 **Start a quest** action and friend invites nearby. Profile information
 expand only when needed. The online directory is always visible in the lobby,
 updates live, and lists every connected, signed-in player automatically, including
-yourself. Multiple tabs count as one player. The board appears during a
+yourself. Multiple tabs count as one player. Below the online player list, the lobby
+shows the total number of registered accounts in smaller italic text for reference, including offline players,
+updated from the database on sign-in, session restore and live lobby updates.
+The board appears during a
 game and stays visible at completion, on desktop and mobile. During play, secret quests and
 their base XP stay beside or directly below the board. The recap celebrates
 earned XP and signed chess rating changes beside the board (directly below on

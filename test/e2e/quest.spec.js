@@ -117,6 +117,41 @@ test('session restore explains an empty successful response', async ({ browser, 
   } finally { await context.close(); }
 });
 
+test('lobby shows the registered player total below the online list in smaller italics and retains offline accounts', async ({ browser, baseURL }) => {
+  const first = await browser.newContext({ baseURL, viewport: { width: 390, height: 844 } });
+  const second = await browser.newContext({ baseURL });
+  const a = await first.newPage();
+  const b = await second.newPage();
+  try {
+    await register(a, 'CountBrowserAlice', '');
+    const initial = await a.evaluate(async () => (await fetch('/api/me').then((res) => res.json())).registeredPlayers);
+    await expect(a.locator('#registered-count')).toHaveText(initial.toLocaleString());
+    await register(b, 'CountBrowserBob', '');
+    await expect(a.locator('#registered-count')).toHaveText((initial + 1).toLocaleString());
+    await expect(b.locator('#registered-count')).toHaveText((initial + 1).toLocaleString());
+    await expect(a.locator('#online-count')).toHaveText('2');
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 }]) {
+      await a.setViewportSize(viewport);
+      const onlineList = await a.locator('#players').boundingBox();
+      const registered = await a.locator('#registered-total').boundingBox();
+      expect(registered.y).toBeGreaterThanOrEqual(onlineList.y + onlineList.height);
+      await expect(a.locator('#registered-total')).toHaveCSS('font-style', 'italic');
+      const sizes = await a.evaluate(() => ({
+        total: parseFloat(getComputedStyle(document.getElementById('registered-total')).fontSize),
+        heading: parseFloat(getComputedStyle(document.querySelector('#online-players h2')).fontSize),
+        player: parseFloat(getComputedStyle(document.querySelector('#players li')).fontSize),
+      }));
+      expect(sizes.total).toBeLessThan(sizes.heading);
+      expect(sizes.total).toBeLessThan(sizes.player);
+    }
+    await b.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(a.locator('#online-count')).toHaveText('1');
+    await expect(a.locator('#registered-count')).toHaveText((initial + 1).toLocaleString());
+    await a.reload();
+    await expect(a.locator('#registered-count')).toHaveText((initial + 1).toLocaleString());
+  } finally { await first.close(); await second.close(); }
+});
+
 test('register, match, complete quest, guess, reconnect, recap and evaluate with Stockfish 19', async ({ browser, baseURL }) => {
   const first = await browser.newContext({ baseURL });
   const second = await browser.newContext({ baseURL });
