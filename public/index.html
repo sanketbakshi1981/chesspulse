@@ -14,7 +14,7 @@
 </head>
 <body>
   <header>
-    <div class="brand"><img src="/img/chesspieces/questoc-logo.png" width="44" height="44" alt="Questoc logo"><div><h1>QUESTOC</h1><p class="brand-subtitle">A Whole New Way to Play Chess.</p></div></div>
+    <a id="home-link" class="brand" href="/" aria-label="Questoc home"><img src="/img/chesspieces/questoc-logo.png" width="44" height="44" alt="Questoc logo"><div><h1>QUESTOC</h1><p class="brand-subtitle">A Whole New Way to Play Chess.</p></div></a>
     <div class="account"><span id="connection" role="status">Not connected</span><button id="logout-btn" class="secondary" hidden>Sign out</button></div>
   </header>
   <p id="app-error" class="error notice" role="alert"></p>
@@ -23,6 +23,12 @@
     <h2 id="auth-title">Welcome back</h2>
     <p class="muted game-introduction">Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent&rsquo;s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.</p>
     <ol class="quest-steps" aria-label="How to play"><li>Play chess</li><li>Try a quest</li><li>Earn XP</li></ol>
+    <form id="guest-form" method="post" action="/api/auth/guest">
+      <label>Guest nickname<input id="guest-name-input" name="name" maxlength="20" autocomplete="off" required></label>
+      <p class="muted">No account, password or rating needed. Choose a nickname and we will find an opponent. All games with guests are unrated.</p>
+      <button id="guest-submit" type="submit" disabled>Play as guest</button>
+    </form>
+    <p class="muted">Or sign in to keep your account progress.</p>
     <form id="checkin-form" method="post" action="/api/auth/login">
       <label>Username<input id="name-input" name="name" maxlength="20" autocomplete="username" required autofocus></label>
       <label>Password<input id="password-input" name="password" type="password" minlength="10" maxlength="128" autocomplete="current-password" aria-describedby="password-hint" required></label>
@@ -43,6 +49,7 @@
     <aside class="stack" id="lobby-panel">
       <section class="card" id="profile-panel">
         <p class="eyebrow">Your quest journey</p><h2 id="me"></h2>
+        <p id="guest-notice" class="muted" hidden>Playing as a guest. Your games are unrated. This browser can restore your guest session for seven days; after signing out or losing the cookie, you cannot sign back into this guest profile.</p>
         <dl id="profile-stats"></dl>
         <details class="profile-settings"><summary>About your profile</summary>
         <p class="muted">Your display name appears in the online list while you're connected. Choose a nickname, not your real name.</p>
@@ -54,6 +61,7 @@
         <h2>A Whole New Way to Play Chess.</h2>
         <p class="muted game-introduction">Make every chess game a strategic adventure: players still aim to win at chess, but also pursue hidden tactical objectives and try to deduce and block their opponent&rsquo;s objectives. Chess Quest adds a second layer of mind games without changing the legal rules of chess.</p>
         <p class="game-facts">10 minutes each &middot; No extra time &middot; A real opponent</p>
+        <p class="muted">Matches with guests are unrated for both players.</p>
         <button id="find-match-btn">Start a quest &middot; 10 min</button>
         <button id="cancel-queue-btn" class="secondary" hidden>Stop searching</button>
         <form id="challenge-form"><label>Invite a friend by display name<input id="challenge-name" maxlength="20" required></label><button type="submit" class="secondary">Send challenge</button></form>
@@ -115,7 +123,7 @@
         <h2>Your quests</h2>
         <ul id="own-quests"></ul>
         <p id="guess-count" role="status"></p>
-        <form id="guess-form"><label>What is their secret quest?<select id="guess-picker"></select></label><button id="guess-btn" type="submit">Guess opponent's quest</button></form>
+        <form id="guess-form"><label>What is their secret quest?<select id="guess-picker"></select></label><button id="guess-btn" type="submit">Guess opponent's quest</button><p id="guess-error" class="error" role="alert"></p></form>
         <ul id="guesses"></ul><ul id="revealed-quests"></ul>
       </section>
       <section id="analysis-panel" class="card" hidden>
@@ -127,6 +135,21 @@
       <section class="card" id="moves-panel"><h2>Moves</h2><ol id="moves"></ol></section>
     </aside>
   </main>
+  <dialog id="quest-dialog" class="game-dialog" aria-labelledby="quest-dialog-title" aria-describedby="quest-dialog-hint">
+    <p class="eyebrow">Your secret mission</p>
+    <h2 id="quest-dialog-title">Your Quest for this game</h2>
+    <ul id="quest-dialog-quests" class="quest-introduction"></ul>
+    <p id="quest-dialog-hint" class="muted">Complete your quest to earn XP. Your opponent's quest is secret. The clock is already running!</p>
+    <button id="quest-got-it" autofocus>Got it</button>
+  </dialog>
+  <dialog id="outcome-dialog" class="game-dialog" aria-labelledby="outcome-dialog-title">
+    <h2 id="outcome-dialog-title"></h2>
+    <p id="outcome-reason" class="muted"></p>
+    <p class="outcome-xp-label">XP earned</p>
+    <p id="outcome-xp" class="xp-award"></p>
+    <p id="outcome-rating"></p>
+    <button id="outcome-close" autofocus>View game recap</button>
+  </dialog>
   <script src="/vendor/jquery/jquery.min.js"></script>
   <script src="/vendor/chessboard/chessboard-1.0.0.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>

@@ -1,6 +1,5 @@
 'use strict';
 
-const { Chess } = require('chess.js');
 const crypto = require('node:crypto');
 const RULES = require('./rules');
 
@@ -39,9 +38,13 @@ function passed(chess, pawn) {
     && (pawn.color === 'w' ? Number(other.square[1]) > rank : Number(other.square[1]) < rank));
 }
 
-function validates(definition, move, chess) {
+function validates(definition, move, chess, color = move.color) {
   const key = definition.validatorKey;
   if (!definition.enabled) return false;
+  if (key === 'passed') {
+    return chess.board().flat().some((pawn) => pawn?.type === 'p' && pawn.color === color && passed(chess, pawn));
+  }
+  if (color !== move.color) return false;
   if (key.startsWith('capture:')) {
     const [, piece, captured] = key.split(':');
     return move.piece === piece && move.captured === captured;
@@ -53,15 +56,6 @@ function validates(definition, move, chess) {
   if (key === 'doublecheck') {
     const king = chess.board().flat().find((p) => p?.type === 'k' && p.color !== move.color);
     return chess.inCheck() && chess.attackers(king.square, move.color).length >= 2;
-  }
-  if (key === 'passed') {
-    const before = new Chess(move.before);
-    return chess.board().flat().some((pawn) => {
-      if (pawn?.type !== 'p' || pawn.color !== move.color || !passed(chess, pawn)) return false;
-      const previousSquare = move.piece === 'p' && pawn.square === move.to ? move.from : pawn.square;
-      const previous = before.get(previousSquare);
-      return previous?.type === 'p' && previous.color === move.color && !passed(before, { ...previous, square: previousSquare });
-    });
   }
   throw new Error(`Unknown quest validator: ${key}`);
 }
@@ -79,9 +73,9 @@ function assign(count = 1, level = 'all') {
   return selected;
 }
 
-function evaluate(assignments, move, chess, ply, now) {
+function evaluate(assignments, move, chess, ply, now, color = move.color) {
   for (const assignment of assignments) {
-    if (assignment.completedAtPly !== null || !validates(assignment, move, chess)) continue;
+    if (assignment.completedAtPly !== null || !validates(assignment, move, chess, color)) continue;
     assignment.completedAtPly = ply;
     assignment.completedAt = now;
     assignment.evidence = { ply, san: move.san, uci: move.from + move.to + (move.promotion || ''), fen: chess.fen() };

@@ -27,6 +27,138 @@ async function keyboardMove(page, move) {
   await page.getByRole('button', { name: 'Play move', exact: true }).click();
 }
 
+async function acknowledgeQuest(page) {
+  const dialog = page.getByRole('dialog', { name: 'Your Quest for this game', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Capture en passant');
+  await expect(dialog).toContainText('40 base XP');
+  await expect(dialog).toContainText('clock is already running');
+  await expect(dialog.getByRole('button', { name: 'Got it', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Got it', exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
+
+async function dismissOutcome(page, title, xp, rating) {
+  const dialog = page.getByRole('dialog', { name: title, exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('#outcome-xp')).toHaveText(xp);
+  await expect(dialog.locator('#outcome-rating')).toContainText(rating);
+  const sizes = await dialog.evaluate((node) => ({
+    xp: parseFloat(getComputedStyle(node.querySelector('#outcome-xp')).fontSize),
+    rating: parseFloat(getComputedStyle(node.querySelector('#outcome-rating')).fontSize),
+  }));
+  expect(sizes.xp).toBeGreaterThan(sizes.rating * 2);
+  await expect(dialog).toBeInViewport({ ratio: 1 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await dialog.getByRole('button', { name: 'View game recap', exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
+
+async function assertBoardCoordinates(page) {
+  const coordinates = await page.locator('#board .notation-322f9').evaluateAll((nodes) => nodes.map((node) => {
+    const style = getComputedStyle(node);
+    const label = node.getBoundingClientRect();
+    const square = node.closest('[data-square]').getBoundingClientRect();
+    return {
+      fontSize: parseFloat(style.fontSize), lineHeight: parseFloat(style.lineHeight),
+      pointerEvents: style.pointerEvents, width: label.width, height: label.height,
+      squareSize: square.width,
+      cornerInset: node.classList.contains('numeric-fc462') ? label.right - square.left : square.right - label.left,
+    };
+  }));
+  expect(coordinates).toHaveLength(16);
+  for (const coordinate of coordinates) {
+    expect(coordinate.fontSize).toBeGreaterThanOrEqual(6);
+    expect(coordinate.fontSize).toBeLessThanOrEqual(14);
+    expect(coordinate.height).toBeLessThanOrEqual(coordinate.squareSize * 0.3);
+    expect(coordinate.cornerInset).toBeLessThan(coordinate.squareSize * 0.25);
+    expect(coordinate.lineHeight).toBe(coordinate.fontSize);
+    expect(coordinate.pointerEvents).toBe('none');
+  }
+  return coordinates[0].fontSize;
+}
+
+async function assertPhoneBoardWidth(page, evaluation = false) {
+  await expect.poll(async () => {
+    const board = await page.locator('#board').boundingBox();
+    return page.viewportSize().width - board.width;
+  }).toBeLessThanOrEqual(evaluation ? 28 : 8);
+  const board = await page.locator('#board').boundingBox();
+  expect(board.x).toBeLessThanOrEqual(evaluation ? 24 : 4);
+  expect(Math.abs(board.width - board.height)).toBeLessThan(5);
+}
+
+test('name-only guest entry automatically matches, restores play and shows unrated results', async ({ browser, baseURL }) => {
+  const guestContext = await browser.newContext({ baseURL });
+  const accountContext = await browser.newContext({ baseURL });
+  const guest = await guestContext.newPage();
+  const account = await accountContext.newPage();
+  try {
+    await register(account, 'GuestOpponent', '2800');
+    await guest.goto('/');
+    await expect(guest.locator('#guest-form input')).toHaveCount(1);
+    await guest.getByLabel('Guest nickname', { exact: true }).fill('BrowserGuest');
+    await guest.getByRole('button', { name: 'Play as guest', exact: true }).click();
+    await expect(guest.locator('#me')).toHaveText('BrowserGuest');
+    await expect(guest.locator('#guest-notice')).toBeVisible();
+    await expect(guest.locator('#profile-stats')).toContainText('Unrated');
+    await expect(guest.locator('#cancel-queue-btn')).toBeVisible();
+    await expect(guest.locator('#lobby-status')).toContainText('unrated');
+    await expect(guest.locator('#registered-count')).toHaveText(await account.locator('#registered-count').textContent());
+    await guest.getByRole('button', { name: 'Stop searching', exact: true }).click();
+    await expect(guest.locator('#cancel-queue-btn')).toBeHidden();
+    await guest.locator('#find-match-btn').click();
+    await account.locator('#find-match-btn').click();
+    await acknowledgeQuest(guest);
+    await acknowledgeQuest(account);
+    await expect(guest.locator('#board-heading')).toContainText('Unrated');
+    await expect(account.locator('#board-heading')).toContainText('Unrated');
+    await guest.reload();
+    await expect(guest.locator('#me')).toHaveText('BrowserGuest');
+    await acknowledgeQuest(guest);
+    await expect(guest.locator('#board-heading')).toContainText('Unrated');
+    if (!await account.locator('#resign-btn').isVisible()) await account.locator('#game-tools summary').click();
+    account.once('dialog', (dialog) => dialog.accept());
+    await account.getByRole('button', { name: 'Resign', exact: true }).click();
+    const outcome = guest.getByRole('dialog', { name: 'You win!', exact: true });
+    await expect(outcome).toBeVisible();
+    await expect(outcome.locator('#outcome-rating')).toHaveText('Unrated game · Chess ratings unchanged');
+    await outcome.getByRole('button', { name: 'View game recap', exact: true }).click();
+    await expect(guest.locator('#recap')).toContainText('Unrated');
+    const accountOutcome = account.getByRole('dialog', { name: 'You lose', exact: true });
+    await expect(accountOutcome.locator('#outcome-rating')).toContainText('Chess ratings unchanged');
+    await expect(account.locator('#profile-stats')).toContainText('2800 (provisional 0/5)');
+  } finally {
+    await guestContext.close();
+    await accountContext.close();
+  }
+});
+
+test('brand logo and wordmark return signed-out visitors to the home page', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL });
+  const page = await context.newPage();
+  try {
+    for (const selector of ['#home-link img', '#home-link h1', '#home-link']) {
+      await page.goto('/?view=signup');
+      await page.getByRole('button', { name: 'New here? Create an account' }).click();
+      await expect(page.locator('#auth-title')).toHaveText('Begin your quest');
+      await expect(page.getByRole('link', { name: 'Questoc home', exact: true })).toHaveAttribute('href', '/');
+      if (selector === '#home-link') {
+        await page.locator(selector).focus();
+        await page.keyboard.press('Enter');
+      } else {
+        await page.locator(selector).click();
+      }
+      await expect(page).toHaveURL(`${baseURL}/`);
+      await expect(page.locator('#auth-title')).toHaveText('Welcome back');
+      await expect(page.locator('#checkin')).toBeVisible();
+      await expect(page.locator('#app')).toBeHidden();
+    }
+  } finally { await context.close(); }
+});
+
 test('sign-in cannot submit credentials when app JavaScript fails to load', async ({ browser, baseURL }) => {
   const context = await browser.newContext({ baseURL });
   const page = await context.newPage();
@@ -57,6 +189,10 @@ test('sign-in remains unavailable with JavaScript disabled', async ({ browser, b
     await expect(page.locator('noscript p')).toBeVisible();
     await expect(page.locator('noscript p')).toHaveText('Please enable JavaScript to sign in and play Questoc.');
     await expect(page.locator('#checkin-form')).toHaveAttribute('method', 'post');
+    await page.goto('/?view=home');
+    await page.getByRole('link', { name: 'Questoc home', exact: true }).click();
+    await expect(page).toHaveURL(`${baseURL}/`);
+    await expect(page.locator('#checkin')).toBeVisible();
   } finally { await context.close(); }
 });
 
@@ -177,6 +313,7 @@ test('register, match, complete quest, guess, reconnect, recap and evaluate with
     await a.getByRole('button', { name: 'Start a quest · 10 min' }).click();
     await b.getByRole('button', { name: 'Start a quest · 10 min' }).click();
     for (const page of [a, b]) {
+      await acknowledgeQuest(page);
       await expect(page.locator('#own-quests')).toContainText('Capture en passant');
       await expect(page.locator('#analysis-panel')).toBeHidden();
       await expect(page.locator('#review-controls')).toBeHidden();
@@ -196,10 +333,13 @@ test('register, match, complete quest, guess, reconnect, recap and evaluate with
     await expect(a.locator('#own-quests')).toContainText('completed on ply 5');
     await a.reload();
     await expect(a.locator('#connection')).toHaveText('Connected');
+    await acknowledgeQuest(a);
     await expect(a.locator('#own-quests')).toContainText('completed on ply 5');
     await expect(a.locator('#guesses')).toContainText('Correct!');
     a.once('dialog', (dialog) => dialog.accept());
     await a.getByRole('button', { name: 'Resign', exact: true }).click();
+    await dismissOutcome(a, 'You lose', '+25 XP', '-16 points');
+    await dismissOutcome(b, 'You win!', '+20 XP', '+16 points');
     await expect(a.locator('#recap')).toContainText('Adventure complete!');
     await expect(a.locator('#recap .reward-summary')).toContainText('+25 XP');
     await expect(a.locator('#recap .reward-summary')).toContainText('-16 points');
@@ -274,6 +414,7 @@ test('register, match, complete quest, guess, reconnect, recap and evaluate with
     await a.reload();
     await expect(a.locator('#history button')).toHaveCount(1);
     await a.locator('#history button').click();
+    await expect(a.locator('#outcome-dialog')).toBeHidden();
     await expect(a.locator('#recap .reward-summary')).toContainText('+25 XP');
     const otherTab = await first.newPage();
     otherTab.on('pageerror', (error) => errors.push(error.message));
@@ -286,6 +427,7 @@ test('register, match, complete quest, guess, reconnect, recap and evaluate with
     await b.getByRole('button', { name: 'Back to lobby', exact: true }).click();
     await a.getByRole('button', { name: 'Start a quest · 10 min' }).click();
     await b.getByRole('button', { name: 'Start a quest · 10 min' }).click();
+    for (const page of [a, b, otherTab]) await acknowledgeQuest(page);
     for (const page of [a, otherTab]) {
       await expect(page.locator('#own-quests')).toBeVisible();
       await expect(page.locator('#analysis-panel')).toBeHidden();
@@ -297,6 +439,8 @@ test('register, match, complete quest, guess, reconnect, recap and evaluate with
       await keyboardMove(ply % 2 ? b : a, move);
     }
     await expect(a.locator('#game-status')).toContainText('checkmate');
+    await dismissOutcome(a, 'You lose', '+0 XP', '-15 points');
+    await dismissOutcome(b, 'You win!', '+0 XP', '+15 points');
     await a.locator('#engine-toggle').check();
     await expect(a.locator('#engine-status')).toContainText('Checkmate');
     await expect(a.locator('#review-position')).toContainText('Position 4 of 4');
@@ -452,6 +596,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
       const board = await page.locator('#board').boundingBox();
       expect(board.width).toBeGreaterThan(300);
       expect(Math.abs(board.width - board.height)).toBeLessThan(5);
+      if (mobile) await assertPhoneBoardWidth(page);
+      await assertBoardCoordinates(page);
     };
     try {
       await register(a, `LayoutA${viewport.width}`, '');
@@ -460,39 +606,71 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
       await a.getByRole('button', { name: 'Send challenge', exact: true }).click();
       await expect(b.locator('#challenges')).toContainText(`LayoutA${viewport.width}`);
       await b.getByRole('button', { name: 'Accept', exact: true }).click();
+      await acknowledgeQuest(a);
+      await acknowledgeQuest(b);
       await assertPlayLayout(a);
       await assertPlayLayout(b);
+      for (const selector of ['#home-link img', '#home-link h1']) {
+        await a.locator(selector).click();
+        await expect(a.locator('#app-error')).toBeEmpty();
+        await expect(a.locator('#lobby-panel')).toBeHidden();
+        await assertPlayLayout(a);
+      }
       if (mobile) {
+        let previousCoordinateSize = await assertBoardCoordinates(a);
         for (const size of [{ width: 360, height: 800 }, { width: 844, height: 390 }]) {
           await a.setViewportSize(size);
           for (const selector of ['#board', '#top-player', '#bottom-player', '#own-quests', '#guess-btn']) {
             await expect(a.locator(selector)).toBeInViewport({ ratio: 1 });
           }
           expect(await a.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          if (size.width < 600) await assertPhoneBoardWidth(a);
+          const coordinateSize = await assertBoardCoordinates(a);
+          expect(coordinateSize).toBeLessThan(previousCoordinateSize);
+          previousCoordinateSize = coordinateSize;
         }
         await a.setViewportSize(viewport);
       }
       await a.reload();
       await expect(a.locator('#connection')).toHaveText('Connected');
+      await acknowledgeQuest(a);
       await assertPlayLayout(a);
+      await a.locator('#guess-picker').selectOption('E01');
+      await a.getByRole('button', { name: "Guess opponent's quest", exact: true }).click();
+      await expect(a.locator('#guess-error')).toHaveText('Guess incorrect or no longer eligible. Attempt used.');
+      await expect(a.locator('#app-error')).toBeEmpty();
+      await expect(a.locator('#guess-count')).toContainText('1 of 2 guesses remaining');
+      const guessButton = await a.locator('#guess-btn').boundingBox();
+      const guessError = await a.locator('#guess-error').boundingBox();
+      expect(guessError.y).toBeGreaterThanOrEqual(guessButton.y + guessButton.height);
+      await expect(a.locator('#guess-error')).toBeInViewport({ ratio: 1 });
+      const failedGuessAt = (await (await a.request.get('/api/me')).json()).game.guesses[0].submittedAt;
       await a.locator('#board [data-square="e2"]').click();
       await a.locator('#board [data-square="e4"]').click();
       await expect(a.locator('#moves')).toContainText('e4');
       await b.locator('#board [data-square="e7"]').click();
       await b.locator('#board [data-square="e5"]').click();
       await expect(a.locator('#moves')).toContainText('e5');
+      await expect(a.locator('#quest-dialog')).toBeHidden();
+      await expect.poll(() => Date.now() - failedGuessAt).toBeGreaterThanOrEqual(1000);
       await a.locator('#guess-picker').selectOption('M08');
       await a.getByRole('button', { name: "Guess opponent's quest", exact: true }).click();
       await expect(a.locator('#guesses')).toContainText('Correct!');
+      await expect(a.locator('#guess-error')).toBeEmpty();
+      await a.locator('#guesses').scrollIntoViewIfNeeded();
       await expect(a.locator('#guesses')).toBeInViewport({ ratio: 1 });
       await expect(a.locator('#own-quests')).toBeInViewport({ ratio: 1 });
       if (mobile) await a.locator('#game-tools summary').click();
       a.once('dialog', (dialog) => dialog.accept());
       await a.getByRole('button', { name: 'Resign', exact: true }).click();
+      await dismissOutcome(a, 'You lose', '+0 XP', '-16 points');
+      await dismissOutcome(b, 'You win!', '+0 XP', '+16 points');
       await expect(a.locator('#recap')).toContainText('Adventure complete!');
       await expect(a.locator('#lobby-panel')).toBeHidden();
       await expect(a.locator('#history button')).toHaveCount(1);
       await expect(a.locator('#board')).toBeVisible();
+      if (mobile) await assertPhoneBoardWidth(a);
+      await assertBoardCoordinates(a);
       await expect(a.locator('#recap .reward-summary')).toContainText('+0 XP');
       await expect(a.locator('#recap .reward-summary')).toContainText('-16 points');
       for (const selector of ['#board', '#recap .reward-summary']) {
@@ -504,19 +682,52 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 720 
       else expect(rewards.x).toBeGreaterThan(finalBoard.x + finalBoard.width);
       await a.locator('#engine-toggle').check();
       await expect(a.locator('#review-controls')).toBeVisible();
+      if (mobile) await assertPhoneBoardWidth(a, true);
       await a.getByRole('button', { name: 'First position', exact: true }).click();
       await expect(a.locator('#review-position')).toContainText('Position 0 of 2');
-      await a.getByRole('button', { name: 'Back to lobby', exact: true }).click();
+      await a.locator('#home-link img').click();
       await expect(a.locator('#engine-toggle')).not.toBeChecked();
       await expect(a.locator('#board')).toBeHidden();
+      await expect(a.locator('#lobby-panel')).toBeVisible();
+      await expect(a.locator('#me')).toHaveText(`LayoutA${viewport.width}`);
+      await expect(a.locator('#connection')).toHaveText('Connected');
       await a.locator('#history button').click();
       await expect(a.locator('#board')).toBeVisible();
-      await a.getByRole('button', { name: 'Back to lobby', exact: true }).click();
+      await a.locator('#home-link h1').click();
+      await expect(a.locator('#lobby-panel')).toBeVisible();
+      await expect(a.locator('#board')).toBeHidden();
       await a.locator('#find-match-btn').click();
       await expect(a.locator('#board')).toBeHidden();
       await b.getByRole('button', { name: 'Back to lobby', exact: true }).click();
       await b.locator('#find-match-btn').click();
+      await expect(a.locator('#quest-dialog')).toBeVisible();
+      await expect(a.locator('#move-form button')).toBeDisabled();
+      await expect(a.locator('#clock-w')).not.toHaveText('10:00');
+      await a.locator('#board [data-square="e2"]').evaluate((square) => square.click());
+      await expect(a.locator('#board .selected')).toHaveCount(0);
+      await acknowledgeQuest(a);
+      await expect(a.locator('#guess-error')).toBeEmpty();
       await assertPlayLayout(a);
+      await expect(b.locator('#quest-dialog')).toBeVisible();
+      await keyboardMove(a, 'e2e4');
+      await expect(b.locator('#moves')).toContainText('e4');
+      await expect(b.locator('#quest-dialog')).toBeVisible();
+      a.once('dialog', (dialog) => dialog.accept());
+      await a.getByRole('button', { name: 'Resign', exact: true }).click();
+      await expect(b.locator('#quest-dialog')).toBeHidden();
+      await dismissOutcome(a, 'You lose', '+0 XP', '-15 points');
+      await dismissOutcome(b, 'You win!', '+0 XP', '+15 points');
+      for (const page of [a, b]) await page.getByRole('button', { name: 'Back to lobby', exact: true }).click();
+      await a.locator('#find-match-btn').click();
+      await b.locator('#find-match-btn').click();
+      await acknowledgeQuest(a);
+      await acknowledgeQuest(b);
+      if (!await a.locator('#draw-btn').isVisible()) await a.locator('#game-tools summary').click();
+      await a.getByRole('button', { name: 'Offer draw', exact: true }).click();
+      if (!await b.locator('#accept-draw-btn').isVisible()) await b.locator('#game-tools summary').click();
+      await b.getByRole('button', { name: 'Accept draw', exact: true }).click();
+      await dismissOutcome(a, 'Game drawn!', '+0 XP', '+3 points');
+      await dismissOutcome(b, 'Game drawn!', '+0 XP', '-3 points');
       expect(errors).toEqual([]);
     } finally { await first.close(); await second.close(); }
   });

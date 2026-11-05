@@ -50,8 +50,131 @@ async function fixture(t, options = {}) {
     await session;
     return socket;
   }
-  return { ...server, base, account, connect };
+  async function guest(name) {
+    const response = await fetch(`${base}/api/auth/guest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    assert.equal(response.status, 200);
+    return { ...await response.json(), cookie: response.headers.get('set-cookie').split(';')[0] };
+  }
+  return { ...server, base, account, guest, connect };
 }
+
+test('guest entry requires only a unique nickname and creates a private, restorable session', async (t) => {
+  const f = await fixture(t);
+  const account = await f.account('Account');
+  for (const body of [null, [], {}, { name: '<script>' }, { name: 'x'.repeat(21) }, { name: 'account' }]) {
+    const response = await fetch(`${f.base}/api/auth/guest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 400);
+    assert.ok((await response.json()).error);
+  }
+  const guest = await f.guest('  Guest   One ');
+  assert.equal(guest.user.name, 'Guest One');
+  assert.equal(guest.user.isGuest, true);
+  assert.equal(guest.user.provisional, false);
+  assert.equal(guest.user.selfReportedRating, null);
+  assert.equal(guest.user.password_hash, undefined);
+  assert.equal(guest.registeredPlayers, 1);
+  assert.equal(account.user.isGuest, false);
+  const restored = await fetch(`${f.base}/api/me`, { headers: { Cookie: guest.cookie } }).then((r) => r.json());
+  assert.equal(restored.user.id, guest.user.id);
+  const socket = await f.connect(guest);
+  const players = await f.lobby.listPlayers();
+  assert.equal(players[0].isGuest, true);
+  assert.equal(players[0].rating, null);
+  const login = await fetch(`${f.base}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Guest One', password: 'testing-password' }),
+  });
+  assert.equal(login.status, 401);
+  const disconnected = once(socket, 'disconnect');
+  assert.equal((await fetch(`${f.base}/api/auth/logout`, {
+    method: 'POST', headers: { Cookie: guest.cookie, 'Content-Type': 'application/json' }, body: '{}',
+  })).status, 200);
+  await disconnected;
+  assert.equal((await fetch(`${f.base}/api/me`, { headers: { Cookie: guest.cookie } })).status, 401);
+});
+
+for (const opponentType of ['guest', 'account']) {
+  test(`guest matchmaking against an ${opponentType} is unrated and restores the active game`, async (t) => {
+    const f = await fixture(t);
+    const guest = await f.guest('Guest');
+    const opponent = opponentType === 'guest' ? await f.guest('Opponent') : await f.account('Opponent', '2800');
+    const a = await f.connect(guest);
+    const b = await f.connect(opponent);
+    await emit(a, 'matchmaking:join');
+    const starts = Promise.all([once(a, 'game:update'), once(b, 'game:update')]);
+    await emit(b, 'matchmaking:join');
+    const [game, other] = await starts;
+    assert.equal(game.rated, false);
+    assert.equal(other.rated, false);
+    assert.equal(game.gameId, other.gameId);
+    assert.equal(game.assignments, undefined);
+    assert.deepEqual(game.revealedQuests, []);
+    assert.equal((await fetch(`${f.base}/vendor/stockfish/stockfish-19-lite-single.js`, {
+      headers: { Cookie: guest.cookie },
+    })).status, 403);
+    const moved = once(a, 'game:update');
+    await emit(a, 'game:move', { gameId: game.gameId, version: 0, from: 'e2', to: 'e4' });
+    await moved;
+    a.close();
+    const recovered = await f.connect(guest);
+    const restored = await fetch(`${f.base}/api/me`, { headers: { Cookie: guest.cookie } }).then((r) => r.json());
+    assert.equal(restored.game.rated, false);
+    assert.deepEqual(restored.game.moves, ['e4']);
+    const over = once(recovered, 'game:update');
+    await emit(b, 'game:resign', { gameId: game.gameId });
+    const final = await over;
+    for (const color of ['w', 'b']) assert.equal(final.recap.players[color].ratingDelta, 0);
+    for (const player of [guest, opponent]) {
+      const user = await f.store.user(player.user.id);
+      assert.equal(user.rating, player.user.rating);
+      assert.equal(user.rated_games, 0);
+      assert.equal(await f.lobby.activeId(user.id), undefined);
+    }
+    const recap = await fetch(`${f.base}/api/games/${game.gameId}`, {
+      headers: { Cookie: guest.cookie },
+    }).then((r) => r.json());
+    assert.equal(recap.rated, false);
+    assert.equal((await f.lobby.history(guest.user.id))[0].gameId, game.gameId);
+  });
+}
+
+test('SQLite version 1 migration preserves accounts, sessions and rated games while enabling guests', async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'chessquest-migration-'));
+  t.after(() => rmSync(directory, { recursive: true }));
+  const filename = path.join(directory, 'test.sqlite');
+  let store = new Store(filename);
+  t.after(() => store.close());
+  const alice = await store.register({ name: 'Alice', password: 'testing-password' });
+  const bob = await store.register({ name: 'Bob', password: 'testing-password' });
+  const token = await store.createSession(alice.id);
+  let lobby = new Lobby(store, { randomColor: () => true });
+  lobby.connect(alice.id, 'a');
+  lobby.connect(bob.id, 'b');
+  const { game } = await lobby.start(alice.id, bob.id);
+  delete game.rated;
+  await store.saveGame(game);
+  await store.db.exec('ALTER TABLE users DROP COLUMN is_guest; PRAGMA user_version=1;');
+  await store.close();
+  store = new Store(filename);
+  lobby = new Lobby(store);
+  assert.equal((await store.db.prepare('PRAGMA user_version').get()).user_version, 2);
+  assert.equal((await store.session(token)).id, alice.id);
+  assert.equal((await store.login({ name: 'Alice', password: 'testing-password' })).is_guest, 0);
+  assert.equal(lobby.snapshot(await lobby.game(game.id), alice.id).rated, true);
+  await lobby.act(bob.id, 'resign', { gameId: game.id });
+  assert.equal((await store.user(alice.id)).rating, 1016);
+  const guest = await store.guest({ name: 'Guest' });
+  const guestToken = await store.createSession(guest.id);
+  await store.close();
+  store = new Store(filename);
+  assert.equal((await store.session(guestToken)).is_guest, 1);
+  assert.equal(await store.registeredPlayerCount(), 2);
+});
 
 test('authenticated end-to-end game, private quests, stale packets, recap and history', async (t) => {
   const f = await fixture(t);
@@ -74,6 +197,7 @@ test('authenticated end-to-end game, private quests, stale packets, recap and hi
   assert.equal(ga.recap, null);
   assert.equal(ga.white.id, alice.user.id);
   assert.equal(ga.timeControl, '10+0');
+  assert.equal(ga.rated, true);
   assert.match((await emit(b, 'game:move', { gameId: ga.gameId, version: 0, from: 'e7', to: 'e5' })).error, /turn/);
   const update = once(b, 'game:update');
   assert.deepEqual(await emit(a, 'game:move', { gameId: ga.gameId, version: 0, from: 'e2', to: 'e4' }), { ok: true });

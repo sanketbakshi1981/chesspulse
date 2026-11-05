@@ -26,7 +26,7 @@ header {
   flex-wrap: wrap;
 }
 header p { margin: 0.3rem 0 0; }
-.brand { display: flex; align-items: center; gap: 0.75rem; }
+.brand { display: flex; align-items: center; gap: 0.75rem; color: inherit; text-decoration: none; }
 .brand img { flex-shrink: 0; object-fit: contain; }
 .brand h1 { color: var(--text-accent); font-weight: 900; letter-spacing: -0.05em; }
 .brand p { color: var(--facet-highlights); }
@@ -64,6 +64,27 @@ input[type="checkbox"] { min-height: 20px; width: 20px; flex-shrink: 0; accent-c
 #own-quests li.completed { border-color: #9acfb3; background: #eef9f1; }
 #own-quests strong, .quest-meta { display: block; }
 .quest-meta { font-size: 0.8rem; margin-top: 0.2rem; }
+#guess-error { margin: 0.5rem 0 0; font-size: 0.85rem; }
+.game-dialog {
+  width: min(460px, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 12px 40px #0a1f4433;
+}
+.game-dialog::backdrop { background: #0a1f4499; }
+.game-dialog h2 { font-size: 1.5rem; }
+.game-dialog > button { width: 100%; }
+.quest-introduction { list-style: none; padding: 0; }
+.quest-introduction li { padding: 0.75rem; background: #edf2fc; border-radius: 12px; margin-bottom: 0.5rem; }
+.quest-introduction strong { display: block; }
+.outcome-xp-label { margin-bottom: 0; font-weight: 700; }
+#outcome-xp { font-size: 3rem; line-height: 1.2; margin: 0.5rem 0; }
+#outcome-rating { font-size: 0.85rem; margin-bottom: 1.5rem; }
 .player-label { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .clock { font-weight: 700; font-size: 1.5rem; font-variant-numeric: tabular-nums; background: #e6edf9; padding: 0.35rem 0.75rem; border-radius: 10px; }
 .clock.running { background: var(--accent-bars); color: #fff; }
@@ -194,11 +215,19 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
 #board {
   flex: 1;
   min-width: 0;
+  container-type: inline-size;
   border-radius: 4px;
   overflow: hidden;
   user-select: none;
 }
 #board [data-square] { cursor: pointer; }
+#board .notation-322f9 {
+  font-size: clamp(6px, 2.4cqi, 14px);
+  line-height: 1;
+  pointer-events: none;
+}
+#board .alpha-d2270 { bottom: 1px; right: 1px; }
+#board .numeric-fc462 { top: 1px; left: 1px; }
 #board .white-1e1d7 { background: #f6f0e2; color: var(--accent-bars); }
 #board .black-3c85d { background: #93a9c6; color: var(--accent-bars); }
 #board .last.white-1e1d7 { background: #ffe49a; }
@@ -290,6 +319,7 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   #connection { overflow-wrap: anywhere; }
   button, select, input { min-height: 44px; }
   main { padding: 0.75rem; gap: 0.75rem; }
+  .active-game main, .reviewing main { padding-inline: 4px; }
   body:not(.active-game):not(.reviewing) main { padding: 0.75rem; }
   #lobby-panel { display: flex; flex-direction: column; }
   #lobby-panel > .card { width: 100%; }
@@ -321,7 +351,8 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   .reviewing #game-tools { grid-row: 4; }
   .reviewing #analysis-panel { grid-row: 5; }
   .reviewing #moves-panel { grid-row: 6; }
-  .reviewing #board-wrap { max-width: min(100%, max(220px, calc(100dvh - 500px))); }
+  .reviewing #board-wrap { max-width: 100%; }
+  .reviewing #eval-bar:not(.visible) { display: none; }
   #review-back-btn { margin-bottom: 0.75rem; }
   #game-tools > summary { display: list-item; cursor: pointer; padding: 0.75rem; min-height: 44px; }
   #game-tools:not([open]) > :not(summary) { display: none; }
@@ -329,14 +360,14 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   #game-tools[open] > .controls { display: flex; }
   #game-tools { background: #fff; border: 1px solid var(--line); border-radius: 12px; }
   #game-tools[open] { padding: 0 0.5rem 0.5rem; }
-  .active-game main { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .active-game main { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; padding-block: 0.25rem; }
   .active-game #board-area, .active-game #side-panel { display: contents; }
   .active-game #play-area { grid-row: 1; }
-  .active-game #quest-panel { grid-row: 2; padding: 0.65rem; }
+  .active-game #quest-panel { grid-row: 2; padding: 0.5rem; }
   .active-game #game-tools { grid-row: 3; }
   .active-game #board-heading, .reviewing #board-heading { display: none; }
-  .active-game #board-wrap { max-width: min(100%, max(220px, calc(100dvh - 500px))); }
-  .active-game .player-bar, .reviewing .player-bar { padding: 0.25rem 0; }
+  .active-game #board-wrap { max-width: 100%; }
+  .active-game .player-bar, .reviewing .player-bar { padding: 0; }
   .active-game .player-label > span, .reviewing .player-label > span { font-size: 0.85rem; overflow-wrap: anywhere; }
   .active-game .clock, .reviewing .clock { font-size: 1.2rem; padding: 0.25rem 0.5rem; flex-shrink: 0; }
   .active-game #game-status, .reviewing #game-status { margin: 0.3rem 0; font-size: 0.9rem; }
@@ -346,7 +377,8 @@ body:not(.active-game):not(.reviewing) #recap { grid-column: 1 / -1; }
   .active-game #own-quests li { padding: 0.35rem 0.5rem; }
   .active-game .quest-meta { font-size: 0.75rem; margin: 0; }
   .active-game #guess-count { margin: 0.3rem 0; font-size: 0.8rem; }
-  .active-game #guess-form { display: grid; gap: 0.4rem; }
+  .active-game #guess-form { display: grid; gap: 0.25rem; }
+  .active-game #guess-error { margin-top: 0.25rem; }
   .active-game #guess-form label { margin: 0; font-size: 0.85rem; gap: 0.2rem; }
   .active-game #guesses, .active-game #revealed-quests { font-size: 0.8rem; margin: 0.3rem 0; }
   .active-game #guesses:empty, .active-game #revealed-quests:empty { display: none; }

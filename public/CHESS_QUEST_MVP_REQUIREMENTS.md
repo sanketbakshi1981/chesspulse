@@ -5,6 +5,8 @@
 **Priority:** P0 unless otherwise stated  
 **Product promise:** *A Whole New Way to Play Chess.*
 
+**Guest play update (November 5, 2026):** Guests enter only a unique nickname, with no password, experience or rating, and immediately start matchmaking. Guest sessions can play, reconnect, complete quests, earn eligible XP and review games through the same shared queue and friend challenges as accounts. All games involving a guest are unrated for both players and do not increment provisional-game counts. Guest pairings are not restricted by rating bands. Label guests and unrated games clearly, exclude guests from registered-account totals, and retain rated account-vs-account behavior. A guest profile is accessible only through its seven-day browser session, not password login or recovery. These rules supersede account-only participation and rating requirements below.
+
 **Reward and recap update (November 2, 2026):** For new games, correct guesses earn 10 base XP and quests retain 20 / 40 / 60 base XP. Every base reward is a multiple of 10, so win / draw / loss multipliers require no rounding. Existing games retain their saved reward rules. On completion, keep the board visible with earned XP and signed chess rating changes beside it, or directly below on mobile. Show guess titles and outcomes without timestamps. These rules supersede earlier guess-XP, rounding and completed-board visibility defaults.
 
 **Requirements update (October 27, 2026):** Keep the player's quest and opponent-guess action visible beside or directly below the board without page scrolling. Offer exactly 10 quest options, including exactly one correct answer, with one guess per player per game. A correct, timely guess earns 5 base XP, subject to the existing result multiplier. These rules supersede the earlier two-attempt / 15-XP defaults.
@@ -193,7 +195,7 @@ Difficulty levels are **initial product classifications**, not verified estimate
 | E03 | Easy | Rook captures bishop | Player's rook legally captures enemy bishop |
 | E04 | Easy | Castle queenside | Player legally castles long |
 | E05 | Easy | Force a queen trade | Both queens exchanged in an objectively defined sequence; **needs formal definition** |
-| E06 | Easy | Create a passed pawn | Player has a passed pawn after their move, not merely at initial state |
+| E06 | Easy | Create a passed pawn | After either player's accepted legal move, the quest owner has a pawn with no enemy pawn ahead on its file or adjacent files; existing passed pawns and pawns on their starting rank qualify. Evaluate both players, once per quest, before game-end rewards |
 | M01 | Medium | Win material with knight fork | Knight attacks 2+ qualifying targets and wins material; **needs formal definition** |
 | M02 | Medium | Win material with bishop fork | Bishop attacks 2+ qualifying targets and wins material; **needs formal definition** |
 | M03 | Medium | Win material with pawn fork | Pawn attacks 2+ qualifying targets and wins material; **needs formal definition** |

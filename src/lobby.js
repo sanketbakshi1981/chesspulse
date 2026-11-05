@@ -63,7 +63,8 @@ class Lobby {
     for (const id of ids) {
       const u = await this.store.user(id);
       players.push({
-        id: u.id, name: u.name, rating: u.rating, status: await this.activeId(u.id) ? 'in_game' : 'online',
+        id: u.id, name: u.name, rating: u.is_guest ? null : u.rating, isGuest: Boolean(u.is_guest),
+        status: await this.activeId(u.id) ? 'in_game' : 'online',
       });
     }
     return players.sort((a, b) => a.name.localeCompare(b.name));
@@ -98,6 +99,7 @@ class Lobby {
       const game = {
         id: crypto.randomUUID(), white: { id: white.id, name: white.name }, black: { id: black.id, name: black.name },
         ratingBefore: { w: white.rating, b: black.rating }, chess: new Chess(), moves: [], fen: new Chess().fen(),
+        rated: !white.is_guest && !black.is_guest,
         timeControl: '10+0', clocks: { w: TIME_MS, b: TIME_MS }, lastClockAt: now,
         createdAt: now, version: 0, result: null, reason: null, drawOffer: null,
         rules: { ...RULES, guessLimit: this.guessLimit },
@@ -115,7 +117,10 @@ class Lobby {
   }
   async enqueue(id) {
     if (await this.activeId(id)) return { error: 'You are already in a game.' };
-    if (!this.queue.has(id)) this.queue.set(id, { joinedAt: this.now(), rating: (await this.store.user(id)).rating });
+    if (!this.queue.has(id)) {
+      const user = await this.store.user(id);
+      this.queue.set(id, { joinedAt: this.now(), rating: user.rating, isGuest: Boolean(user.is_guest) });
+    }
     return { ok: true };
   }
   async pair() {
@@ -126,7 +131,7 @@ class Lobby {
         if (a === b || !this.online(b) || await this.activeId(b)) continue;
         const wait = this.now() - Math.min(first.joinedAt, second.joinedAt);
         const band = this.ratingBand + Math.floor(wait / this.bandIntervalMs) * this.bandStep;
-        if (Math.abs(first.rating - second.rating) > band) continue;
+        if (!first.isGuest && !second.isGuest && Math.abs(first.rating - second.rating) > band) continue;
         const result = await this.start(a, b);
         if (result.game) games.push(result.game);
         break;
@@ -216,7 +221,9 @@ class Lobby {
       game.fen = game.chess.fen();
       game.version++;
       game.drawOffer = null;
-      evaluate(game.assignments[color], move, game.chess, game.moves.length, this.now());
+      for (const owner of ['w', 'b']) {
+        evaluate(game.assignments[owner], move, game.chess, game.moves.length, this.now(), owner);
+      }
       this.checkEnd(game);
       return null;
     }
@@ -300,7 +307,8 @@ class Lobby {
     const scoreW = game.result === '1-0' ? 1 : game.result === '0-1' ? 0 : 0.5;
     const users = { w: await this.store.user(game.white.id), b: await this.store.user(game.black.id) };
     const expectedW = 1 / (1 + 10 ** ((users.b.rating - users.w.rating) / 400));
-    const change = game.reason === 'server abandonment' ? 0 : Math.round(game.rules.eloK * (scoreW - expectedW));
+    const rated = game.rated !== false && game.reason !== 'server abandonment';
+    const change = rated ? Math.round(game.rules.eloK * (scoreW - expectedW)) : 0;
     game.recap = { xpEligible, flags, players: {} };
     for (const color of ['w', 'b']) {
       const user = users[color];
@@ -317,7 +325,7 @@ class Lobby {
       await this.store.db.prepare('INSERT INTO xp_ledger VALUES (?,?,?)').run(game.id, user.id, JSON.stringify(ledger));
       await this.store.db.prepare('INSERT INTO rating_changes VALUES (?,?,?,?)').run(game.id, user.id, user.rating, after);
       await this.store.db.prepare('UPDATE users SET rating=?,xp=xp+?,rated_games=rated_games+? WHERE id=?')
-        .run(after, total, Number(game.reason !== 'server abandonment'), user.id);
+        .run(after, total, Number(rated), user.id);
       game.recap.players[color] = {
         id: user.id, name: user.name, ratingBefore: user.rating, ratingAfter: after,
         ratingDelta: after - user.rating, ...ledger, totalXp: user.xp + total,
@@ -354,6 +362,7 @@ class Lobby {
     return {
       gameId: game.id, white: game.white, black: game.black, fen: game.chess.fen(), turn: game.chess.turn(),
       moves: game.moves.map((m) => m.san), moveRecords: game.moves, version: game.version, timeControl: '10+0',
+      rated: game.rated !== false,
       clocks, serverNow: this.now(), result: game.result, reason: game.reason, drawOffer: game.drawOffer,
       ownQuests: game.assignments[color], guesses: game.guesses[color],
       guessLimit: game.rules.guessLimit, guessXp: game.rules.guessXp, eloK: game.rules.eloK,

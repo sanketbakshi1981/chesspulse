@@ -107,7 +107,7 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000 } 
     next();
   });
   app.use(express.json({ limit: '8kb' }));
-  for (const action of ['register', 'login']) {
+  for (const action of ['register', 'login', 'guest']) {
     app.post(`/api/auth/${action}`, route(async (req, res, next) => {
       if (!rate(`auth:${req.ip}`, 20)) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
       if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) return res.status(400).json({ error: 'Invalid request.' });
@@ -142,7 +142,7 @@ function createServer({ store = new Store(), lobbyOptions = {}, tickMs = 1000 } 
   }));
 
   app.use('/vendor/stockfish', auth, route(async (req, res, next) => {
-    if (await lobby.activeId(req.user.id)) return res.status(403).json({ error: 'Evaluation is prohibited during rated games.' });
+    if (await lobby.activeId(req.user.id)) return res.status(403).json({ error: 'Evaluation is prohibited during games.' });
     res.setHeader('Cache-Control', 'no-store');
     next();
   }), express.static(path.join(ROOT, 'node_modules/stockfish/bin'), {

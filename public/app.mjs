@@ -41,8 +41,10 @@ const state = {
   history: [],
   queued: false,
   movePending: false,
+  guessPending: false,
   clockReceivedAt: 0,
   registering: false,
+  startGuestMatch: false,
   reviewPly: 0,
   analysisVariation: false,
   reviewing: false,
@@ -119,9 +121,22 @@ $('checkin-form').addEventListener('submit', async (e) => {
   finally { $('auth-submit').disabled = false; }
 });
 
+$('guest-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('checkin-error').textContent = '';
+  $('guest-submit').disabled = true;
+  try {
+    applySession(await api('/api/auth/guest', { name: $('guest-name-input').value }));
+    state.startGuestMatch = true;
+    socket.connect();
+  } catch (error) { $('checkin-error').textContent = error.message; }
+  finally { $('guest-submit').disabled = false; }
+});
+
 function applySession(data) {
   const signingIn = $('app').hidden;
   if (state.me && state.me.id !== data.user.id) {
+    closeGameDialogs();
     setEngineEnabled(false);
     state.game = null;
     state.mode = 'idle';
@@ -140,11 +155,13 @@ function applySession(data) {
   $('checkin').hidden = true;
   $('app').hidden = false;
   $('logout-btn').hidden = false;
+  $('guest-notice').hidden = !data.user.isGuest;
   $('me').textContent = data.user.name;
   $('profile-stats').replaceChildren(
     el('dt', { textContent: 'Total XP' }), el('dd', { className: 'xp-total', textContent: `${data.user.xp} XP` }),
     el('dt', { textContent: 'Quest Rank' }), el('dd', { textContent: data.user.questRank }),
-    el('dt', { className: 'rating-stat', textContent: 'Chess rating (10+0)' }), el('dd', { className: 'rating-stat', textContent: `${data.user.rating}${data.user.provisional ? ` (provisional ${data.user.ratedGames}/${data.user.provisionalGames})` : ''}` }),
+    el('dt', { className: 'rating-stat', textContent: data.user.isGuest ? 'Guest games' : 'Chess rating (10+0)' }),
+    el('dd', { className: 'rating-stat', textContent: data.user.isGuest ? 'Unrated' : `${data.user.rating}${data.user.provisional ? ` (provisional ${data.user.ratedGames}/${data.user.provisionalGames})` : ''}` }),
   );
   $('history').replaceChildren(...data.history.map((game) => el('li', {}, el('button', {
     className: 'secondary', textContent: `${game.white} vs ${game.black}: ${game.result}`,
@@ -177,13 +194,20 @@ socket.on('connect', () => {
   $('app-error').textContent = '';
   render();
 });
-socket.on('session', applySession);
+socket.on('session', (data) => {
+  applySession(data);
+  if (state.startGuestMatch) {
+    state.startGuestMatch = false;
+    findMatch();
+  }
+});
 socket.on('profile', applySession);
 socket.on('disconnect', (reason) => {
   state.players = [];
   $('connection').textContent = 'Disconnected — clocks continue; reconnecting…';
   render();
   if (reason === 'io server disconnect') {
+    closeGameDialogs();
     setEngineEnabled(false);
     $('connection').textContent = 'Session ended. Sign in again.';
     $('checkin').hidden = false;
@@ -193,6 +217,7 @@ socket.on('disconnect', (reason) => {
 socket.on('connect_error', (error) => {
   $('connection').textContent = `Connection failed: ${error.message}`;
   if (error.message.includes('Sign in')) {
+    closeGameDialogs();
     setEngineEnabled(false);
     $('checkin').hidden = false;
     $('app').hidden = true;
@@ -274,14 +299,17 @@ $('challenge-form').addEventListener('submit', (event) => {
   challenge($('challenge-name').value);
 });
 $('cancel-challenge-btn').addEventListener('click', cancelChallenge);
-$('find-match-btn').addEventListener('click', async () => {
+async function findMatch() {
   try {
     await send('matchmaking:join');
     state.queued = state.mode !== 'game';
-    setLobbyStatus(state.queued ? 'Looking for your quest buddy! We match players with similar chess ratings.' : '');
+    setLobbyStatus(state.queued ? (state.me.isGuest
+      ? 'Looking for your quest buddy! Your game will be unrated.'
+      : 'Looking for your quest buddy! Account matches use similar chess ratings; matches with guests are unrated.') : '');
     renderLobby();
   } catch (error) { setLobbyStatus(error.message); }
-});
+}
+$('find-match-btn').addEventListener('click', findMatch);
 $('cancel-queue-btn').addEventListener('click', async () => {
   try { await send('matchmaking:leave'); state.queued = false; setLobbyStatus(''); renderLobby(); }
   catch (error) { setLobbyStatus(error.message); }
@@ -306,7 +334,7 @@ function renderLobby() {
     const isMe = p.id === state.me?.id;
     const status = el('span', {
       className: `status ${p.status}`,
-      textContent: `${p.rating} · ${isMe ? '(you)' : p.status === 'in_game' ? 'in game' : 'available'}`,
+      textContent: `${p.isGuest ? 'Guest · Unrated' : p.rating} · ${isMe ? '(you)' : p.status === 'in_game' ? 'in game' : 'available'}`,
     });
     const li = el('li', {}, el('span', {}, el('span', { textContent: `${p.name} ` }), status));
     if (!isMe) {
@@ -346,6 +374,42 @@ function renderLobby() {
 
 // ---------- Authoritative games ----------
 
+function closeGameDialogs() {
+  $('quest-dialog').close();
+  $('outcome-dialog').close();
+}
+
+$('quest-dialog').addEventListener('cancel', (event) => event.preventDefault());
+$('quest-got-it').addEventListener('click', () => {
+  $('quest-dialog').close();
+  render(false);
+});
+$('outcome-close').addEventListener('click', () => {
+  $('outcome-dialog').close();
+  startReview();
+});
+
+function showQuestDialog(game) {
+  closeGameDialogs();
+  $('quest-dialog-quests').replaceChildren(...game.ownQuests.map((q) => el('li', {},
+    el('strong', { textContent: q.title }),
+    el('span', { className: 'quest-meta', textContent: `${q.level} · ${q.baseXp} base XP` }))));
+  $('quest-dialog').showModal();
+}
+
+function showOutcomeDialog(game) {
+  closeGameDialogs();
+  const me = game.recap.players[state.myColor];
+  const won = game.result === (state.myColor === 'w' ? '1-0' : '0-1');
+  $('outcome-dialog-title').textContent = game.result === '1/2-1/2' ? 'Game drawn!' : won ? 'You win!' : 'You lose';
+  $('outcome-reason').textContent = `${RESULT_TEXT[game.result]} by ${game.reason}.`;
+  $('outcome-xp').textContent = `${formatDelta(me.total)} XP`;
+  $('outcome-rating').textContent = game.rated === false ? 'Unrated game · Chess ratings unchanged'
+    : `Chess rating: ${formatDelta(me.ratingDelta)} points (${me.ratingAfter})`;
+  $('outcome-rating').className = me.ratingDelta < 0 ? 'rating-loss' : 'rating-gain';
+  $('outcome-dialog').showModal();
+}
+
 function receiveGame(game) {
   if (state.game?.gameId === game.gameId && state.game.version > game.version) return;
   const starting = !game.result && (state.mode !== 'game' || state.game?.gameId !== game.gameId);
@@ -356,6 +420,8 @@ function receiveGame(game) {
   state.game = game;
   state.myColor = game.white.id === state.me.id ? 'w' : 'b';
   if (starting) {
+    state.guessPending = false;
+    $('guess-error').textContent = '';
     state.orientation = state.myColor;
     state.outgoing = null;
     state.incoming.clear();
@@ -370,8 +436,13 @@ function receiveGame(game) {
   state.reviewPly = game.moves.length;
   state.analysisVariation = false;
   if (!game.result) setEngineEnabled(false);
+  if (starting) showQuestDialog(game);
+  else if (game.result) $('quest-dialog').close();
   render();
-  if (finishing) $('review-back-btn').scrollIntoView({ block: 'start' });
+  if (finishing) {
+    $('review-back-btn').scrollIntoView({ block: 'start' });
+    showOutcomeDialog(game);
+  }
 }
 socket.on('game:update', receiveGame);
 
@@ -401,9 +472,23 @@ $('claim-draw-btn').addEventListener('click', () => {
 $('accept-draw-btn').addEventListener('click', () => gameAction('respondDraw', { accept: true }));
 $('decline-draw-btn').addEventListener('click', () => gameAction('respondDraw', { accept: false }));
 $('rematch-btn').addEventListener('click', () => challenge(state.game[state.myColor === 'w' ? 'black' : 'white'].name));
-$('guess-form').addEventListener('submit', (event) => {
+$('guess-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  gameAction('guess', { questId: $('guess-picker').value });
+  if (state.guessPending) return;
+  const gameId = state.game.gameId;
+  state.guessPending = true;
+  $('guess-error').textContent = '';
+  $('guess-btn').disabled = true;
+  try {
+    await send('game:guess', { gameId, questId: $('guess-picker').value });
+  } catch (error) {
+    if (state.game?.gameId === gameId) $('guess-error').textContent = error.message;
+  } finally {
+    if (state.game?.gameId === gameId) {
+      state.guessPending = false;
+      renderQuests();
+    }
+  }
 });
 $('move-form').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -463,6 +548,7 @@ function createBoard() {
 }
 
 function canMove() {
+  if ($('quest-dialog').open) return false;
   if (state.mode === 'analysis') return true;
   return state.mode === 'game' && socket.connected && !state.movePending && !state.game.result && state.chess.turn() === state.myColor;
 }
@@ -574,6 +660,7 @@ function renderPlayers() {
 }
 
 function renderStatus() {
+  $('board-heading').textContent = `Your chess adventure · 10 minutes each${state.game?.rated === false ? ' · Unrated' : ''}`;
   if (state.game?.result) {
     $('game-status').textContent = `${RESULT_TEXT[state.game.result]} by ${state.game.reason}.`;
     return;
@@ -617,7 +704,7 @@ function renderQuests() {
     disabled: game.guesses.some((g) => g.questId === q.questId),
   })));
   if ([...$('guess-picker').options].some((option) => option.value === previous && !option.disabled)) $('guess-picker').value = previous;
-  $('guess-btn').disabled = game.guessesRemaining === 0 || !socket.connected;
+  $('guess-btn').disabled = state.guessPending || game.guessesRemaining === 0 || !socket.connected;
   $('guesses').replaceChildren(...game.guesses.map((g) => el('li', {
     textContent: `${state.catalog.find((q) => q.questId === g.questId)?.title}: ${g.correct ? `Correct! ${game.guessXp} base XP pending eligibility.` : 'Not correct or no longer eligible.'}`,
   })));
@@ -639,18 +726,18 @@ function renderRecap() {
       el('div', { className: 'reward-stat' }, el('span', { textContent: 'XP earned' }),
         el('strong', { className: 'xp-award', textContent: `${formatDelta(me.total)} XP` })),
       el('div', { className: 'reward-stat' }, el('span', { textContent: 'Chess rating' }),
-        el('strong', { className: me.ratingDelta < 0 ? 'rating-loss' : 'rating-gain', textContent: `${formatDelta(me.ratingDelta)} points` }))),
-    el('p', { className: 'reward-totals', textContent: `Total ${me.totalXp} XP · Rating ${me.ratingAfter}` }),
+        el('strong', { className: me.ratingDelta < 0 ? 'rating-loss' : 'rating-gain', textContent: game.rated === false ? 'Unrated' : `${formatDelta(me.ratingDelta)} points` }))),
+    el('p', { className: 'reward-totals', textContent: `Total ${me.totalXp} XP · ${game.rated === false ? 'Chess ratings unchanged' : `Rating ${me.ratingAfter}`}` }),
     el('p', { textContent: `${RESULT_TEXT[game.result]} · ${game.reason} · ${game.moves.length} plies` }),
     el('button', { textContent: 'Review game board', hidden: state.reviewing, onclick: startReview }));
   const details = el('details', { className: 'recap-details' },
     el('summary', { textContent: 'Quests & reward details' }),
-    el('p', { className: 'muted', textContent: recap.xpEligible ? `Quest XP awarded. Rating is calculated independently using Elo K=${game.eloK}.` : `No XP awarded: ${recap.flags.join(', ')}. Chess rating is calculated independently.` }));
+    el('p', { className: 'muted', textContent: `${recap.xpEligible ? 'Quest XP awarded.' : `No XP awarded: ${recap.flags.join(', ')}.`} ${game.rated === false ? 'Unrated game: neither player gains or loses chess rating.' : `Rating is calculated independently using Elo K=${game.eloK}.`}` }));
   for (const player of Object.values(recap.players)) {
     const section = el('section', { className: 'recap-player' },
       el('h3', { textContent: player.name }),
       el('p', { className: 'xp-award', textContent: `${formatDelta(player.total)} XP` }),
-      el('p', { textContent: `Total ${player.totalXp} XP · Rating ${player.ratingBefore} → ${player.ratingAfter} (${formatDelta(player.ratingDelta)})` }));
+      el('p', { textContent: `Total ${player.totalXp} XP · ${game.rated === false ? 'Unrated game' : `Rating ${player.ratingBefore} → ${player.ratingAfter} (${formatDelta(player.ratingDelta)})`}` }));
     for (const q of player.quests) {
       section.append(el('p', { textContent: `${q.title}: ${q.completedAtPly === null ? 'not completed' : `completed at ply ${q.completedAtPly}, ${q.evidence.san} (${q.evidence.uci})`}` }));
       if (q.evidence) section.append(el('details', {}, el('summary', { textContent: 'Completion evidence' }),
@@ -779,11 +866,22 @@ function startReview() {
   render(false);
   $('review-back-btn').scrollIntoView({ block: 'start' });
 }
-$('review-back-btn').addEventListener('click', () => {
+function returnToLobby() {
   state.reviewing = false;
   setEngineEnabled(false);
   render(false);
   $('lobby').scrollIntoView({ block: 'start' });
+}
+$('review-back-btn').addEventListener('click', returnToLobby);
+$('home-link').addEventListener('click', (event) => {
+  if (!state.me || $('app').hidden || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  if (state.mode === 'game') {
+    window.scrollTo(0, 0);
+    return;
+  }
+  returnToLobby();
+  window.scrollTo(0, 0);
 });
 
 $('flip-btn').addEventListener('click', () => {
@@ -882,6 +980,7 @@ render();
 $('checkin-error').textContent = '';
 $('auth-submit').disabled = false;
 $('auth-switch').disabled = false;
+$('guest-submit').disabled = false;
 
 try {
   const response = await fetch('/api/me');

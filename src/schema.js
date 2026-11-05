@@ -6,7 +6,8 @@ module.exports = `
     password_hash TEXT NOT NULL, salt TEXT NOT NULL, experience TEXT NOT NULL,
     external_rating INTEGER, rating INTEGER NOT NULL, xp INTEGER NOT NULL DEFAULT 0 CHECK(xp>=0),
     rated_games INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 0,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL,
+    is_guest INTEGER NOT NULL DEFAULT 0 CHECK(is_guest IN (0,1))
   );
   CREATE TABLE sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at BIGINT NOT NULL

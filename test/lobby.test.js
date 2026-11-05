@@ -115,6 +115,27 @@ test('direct player challenges and acceptance are single-use', async (t) => {
   assert.equal((await store.loadGames()).length, 1);
 });
 
+test('guest challenges stay unrated while preserving quest XP and idempotent finalization', async (t) => {
+  const f = await fixture(t);
+  const guest = await f.store.guest({ name: 'Guest' });
+  f.lobby.connect(guest.id, 'guest');
+  assert.equal((await f.lobby.challenge(f.alice.id, 'Guest')).to.id, guest.id);
+  const { game } = await f.lobby.respond(guest.id, f.alice.id, true);
+  assert.equal(game.rated, false);
+  f.bob = guest;
+  await setQuest(f.store, f.lobby, game.id, 'w', 'E01');
+  await play(f, game);
+  const final = (await f.lobby.act(guest.id, 'resign', { gameId: game.id })).game;
+  assert.equal(final.recap.xpEligible, true);
+  assert.ok(final.recap.players.w.total > 0);
+  assert.equal(final.recap.players.w.ratingDelta, 0);
+  assert.equal(final.recap.players.b.ratingDelta, 0);
+  assert.equal((await f.store.user(f.alice.id)).rated_games, 0);
+  assert.equal((await f.store.user(guest.id)).rated_games, 0);
+  await f.lobby.act(guest.id, 'resign', { gameId: game.id });
+  assert.equal((await f.store.db.prepare('SELECT COUNT(*) AS n FROM xp_ledger WHERE game_id=?').get(game.id)).n, 2);
+});
+
 test('moves enforce participant, version, legal turn; clocks only charge running side', async (t) => {
   const f = await fixture(t);
   const game = (await f.start());
@@ -170,6 +191,32 @@ test('guess attempts reject repeats, throttle, stop at two, and cannot complete 
   assert.match((await f.lobby.act(f.alice.id, 'guess', { gameId: game.id, questId: 'H04' })).error, /remaining/);
   assert.equal((await f.lobby.game(game.id)).assignments.b[0].completedAtPly, null);
   assert.match((await f.lobby.act(f.alice.id, 'completeQuest', { gameId: game.id, questId: 'E01' })).error, /Unknown/);
+});
+
+test('opponent-created passed pawn completes immediately, persists and earns quest XP', async (t) => {
+  const f = await fixture(t);
+  const game = await f.start();
+  await setQuest(f.store, f.lobby, game.id, 'w', 'E06');
+  await setQuest(f.store, f.lobby, game.id, 'b', 'E06');
+  await play(f, game, ['b1c3', 'a7a6', 'e2e3', 'b7b5', 'f1c4', 'b5b4', 'c4a6']);
+  assert.equal((await f.lobby.game(game.id)).assignments.w[0].completedAtPly, null);
+  assert.match((await f.move(f.bob.id, game.id, 'b4', 'c2')).error, /Illegal/);
+  assert.equal((await f.lobby.game(game.id)).assignments.w[0].completedAtPly, null);
+  assert.ok((await f.move(f.bob.id, game.id, 'b4', 'c3')).ok);
+  const restored = new Lobby(f.store, { now: f.lobby.now });
+  const saved = await restored.game(game.id);
+  const complete = saved.assignments.w[0];
+  assert.equal(complete.completedAtPly, 8);
+  assert.equal(complete.evidence.san, 'bxc3');
+  assert.equal(complete.evidence.fen, saved.chess.fen());
+  assert.equal(restored.snapshot(saved, f.alice.id).ownQuests[0].completedAtPly, 8);
+  assert.equal(saved.assignments.b[0].completedAtPly, null);
+  assert.equal((await f.store.db.prepare('SELECT COUNT(*) AS n FROM quest_completions').get()).n, 1);
+  await play(f, game, ['d2c3', 'e7e6']);
+  assert.deepEqual((await f.lobby.game(game.id)).assignments.w[0], complete);
+  const finished = (await f.lobby.act(f.bob.id, 'resign', { gameId: game.id })).game;
+  assert.deepEqual(finished.recap.players.w.events, [{ source: 'quest', questId: 'E06', baseAmount: complete.baseXp }]);
+  assert.equal((await f.store.user(f.alice.id)).xp, complete.baseXp * RULES.multipliers.win);
 });
 
 test('new base XP is a multiple of 10 and all reward combinations yield exact whole XP', () => {

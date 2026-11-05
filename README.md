@@ -8,7 +8,7 @@ The logo, brand palette and usage guidelines are documented in [COLOR_SCHEME.md]
 The site uses self-hosted Montserrat variable fonts, including bold and italic
 weights, supplied by the OFL-licensed `@fontsource-variable/montserrat` package.
 
-Authenticated, rated human-vs-human chess with secret objectives and opponent
+Human-vs-human chess with account and guest play, secret objectives and opponent
 deduction. There is one game mode and one time control: **10+0 rapid**.
 Chess decides the result; quests earn separate lifetime XP and Quest Rank.
 
@@ -23,11 +23,25 @@ yourself. Multiple tabs count as one player. Below the online player list, the l
 shows the total number of registered accounts in smaller italic text for reference, including offline players,
 updated from the database on sign-in, session restore and live lobby updates.
 The board appears during a
-game and stays visible at completion, on desktop and mobile. During play, secret quests and
-their base XP stay beside or directly below the board. The recap celebrates
+game and stays visible at completion, on desktop and mobile. Board coordinates
+scale with the board width, staying small on phones without intercepting piece
+interactions. On phones in portrait orientation, the board fills the available
+width with 4px side padding during play and review (the enabled evaluation bar
+uses a narrow strip alongside it). Landscape play retains a height cap so the
+quests stay visible beside the board. At the start of each
+game, a **Your Quest for this game** pop-up shows your secret quest and base XP;
+select **Got it** to access the board. Clocks start immediately and keep running
+while either player reads the pop-up. During play, secret quests and
+their base XP stay beside or directly below the board, and guess errors appear
+directly under the Guess button. At completion, a pop-up shows your win, loss or
+draw, with earned XP emphasized and chess rating changes in smaller text.
+Dismiss it to view the recap, which celebrates
 earned XP and signed chess rating changes beside the board (directly below on
 mobile), with a collapsible quest/reward breakdown. Return to the lobby to start
 another adventure; game history reopens the board and its recorded rewards.
+The header logo and QUESTOC wordmark return signed-in players to the lobby,
+stopping postgame evaluation, or signed-out visitors to the home page.
+During an active game, they keep the game visible until it finishes.
 Accounts, database paths and existing deployment resource names are unchanged.
 The current XP rules and compatibility policy are documented below.
 
@@ -44,7 +58,7 @@ npx playwright install chromium   # once per test environment
 npm run test:e2e                  # real Chromium + actual Stockfish WASM evaluation
 ```
 
-Sign up in two separate browser profiles/incognito contexts to play as two
+Play as a guest by entering only a nickname, or sign up in two separate browser profiles/incognito contexts to play as two
 different people. Tabs sharing cookies belong to the same account.
 Registration requires a username and password. The username is also the public
 display name and is used to sign in; existing accounts keep their names.
@@ -93,10 +107,10 @@ evaluation is off and during rated play.
 | [public/app.mjs](public/app.mjs) | Auth/onboarding, profile/history, lobby, chessboard.js interactions, clocks, quests and recap |
 | [public/engine.mjs](public/engine.mjs) | Stockfish 19 UCI worker wrapper |
 
-On first startup, schema version 1 is created transactionally. The previous
-guest lobby had only in-memory identities and games; there is no guest account
-or rating migration. Existing assets are retained. The read-only requirements
-attachment is not modified.
+On first startup, schema version 2 is created transactionally. Existing version 1
+SQLite and PostgreSQL databases migrate automatically, marking all existing users
+as registered accounts. Guest identities use the same persistent sessions and game
+storage as accounts, with a separate guest flag and no usable password.
 
 Data defaults to `data/chessquest.sqlite` (ignored by Git). Users, hashed sessions,
 games/private assignments, move records, quest completion evidence, guesses,
@@ -114,6 +128,16 @@ not immediately forfeit: the server clock keeps running.
 
 ## Identity, ratings and privacy
 
+- **Play as guest** requires only a unique nickname and automatically starts
+  matchmaking. No password, experience or rating is requested. Guests share the
+  queue and friend challenges with accounts; rating bands do not restrict pairings
+  involving a guest. Every game involving a guest is **unrated for both players**:
+  no rating changes or provisional-game increments. Quests, eligible XP, clocks,
+  history, reconnect and postgame review work normally. Account-vs-account games
+  remain rated. Guests are labeled in the directory and excluded from registered
+  account totals. Guest sessions last seven days in the same browser; signing out
+  or losing the cookie makes that guest profile inaccessible, with no password
+  recovery or account conversion.
 - Register with a unique display name and a 10-128 character password. Passwords
   use salted scrypt; raw session tokens are never stored. Seven-day sessions use
   HttpOnly, SameSite=Strict cookies (Secure in production).
@@ -136,7 +160,7 @@ not immediately forfeit: the server clock keeps running.
   application heartbeat with 60-second expiry. Closing one of several tabs does
   not mark the account offline.
 - Matchmaking starts within 100 rating points, widening by 100 every 15 seconds
-  of the older player's wait. It never uses XP. These bands are constructor
+  of the older player's wait for account-vs-account pairings. It never uses XP. These bands are constructor
   options on `Lobby`; challenge acceptance and queue pairing share the same
   transactional game creation path.
 
@@ -191,7 +215,7 @@ Completion timestamps, ply and SAN/UCI/FEN evidence are written once.
 | E02 | Moving piece is a bishop and captured piece is an enemy knight |
 | E03 | Moving piece is a rook and captured piece is an enemy bishop |
 | E04 | Legal move has the queenside-castling flag |
-| E06 | After the mover's move, an own pawn has no enemy pawn ahead on its file or adjacent files, but the corresponding pawn was not passed before the move; compare a moved pawn to its original square. Moving an already-passed pawn does not qualify |
+| E06 | After either player's accepted legal move, the quest owner has a pawn with no enemy pawn ahead on its file or adjacent files. Already-passed pawns qualify, including pawns still on their starting rank; opponent moves can complete this quest. Completion is recorded once, before game-end rewards |
 | M08 | Legal move has the en-passant capture flag |
 | H02 | Resulting opponent king is in check and attacked by at least two of the mover's pieces |
 | H04 | Legal move promotes to queen, rook, bishop or knight |
